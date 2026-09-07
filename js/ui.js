@@ -14,6 +14,8 @@
 //     never reaches innerHTML unsanitized, full stop.
 // ---------------------------------------------------------------------------
 
+import { CHAT_PROMPT_PRESETS } from "./chatPrompts.js";
+
 // ---- Element cache ---------------------------------------------------------
 
 const els = {};
@@ -72,8 +74,10 @@ function cacheElements() {
     "chat-form",
     "chat-input",
     "btn-clear-chat",
+    "chat-prompt-presets",
     "toast-container",
     "unsupported-banner",
+    "panel-resize-handle",
     "engine-status-dot",
     "engine-status-text",
     "engine-model-value",
@@ -598,6 +602,45 @@ export function setSummaryEmptyState(visible) {
   els.summaryEmptyState.classList.toggle("hidden", !visible);
 }
 
+const COPY_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">' +
+  '<rect x="9" y="9" width="12" height="12" rx="2" stroke-linecap="round" stroke-linejoin="round"/>' +
+  '<path d="M5 15V5a2 2 0 012-2h10" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const CHECK_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">' +
+  '<path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+/**
+ * Builds a small hover-reveal "copy" button. `getText` is called at CLICK
+ * time (not creation time) so an assistant bubble's copy button always
+ * copies whatever is currently rendered, even after the throttled renderer
+ * has replaced the bubble's content multiple times during streaming.
+ */
+function createCopyButton(getText) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "bubble-copy-btn";
+  btn.setAttribute("aria-label", "Copy message");
+  btn.title = "Copy message";
+  btn.innerHTML = COPY_ICON;
+  btn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(getText());
+      btn.innerHTML = CHECK_ICON;
+      btn.classList.add("is-copied");
+      setTimeout(() => {
+        btn.innerHTML = COPY_ICON;
+        btn.classList.remove("is-copied");
+      }, 1500);
+    } catch (_) {
+      // Clipboard API can fail (permissions, insecure context) — a copy
+      // button is low-stakes enough to fail quietly rather than interrupt
+      // the conversation with a toast.
+    }
+  });
+  return btn;
+}
+
 export function appendChatUserMessage(text) {
   els.chatEmptyState.classList.add("hidden");
   const row = document.createElement("div");
@@ -606,6 +649,7 @@ export function appendChatUserMessage(text) {
   bubble.className = "bubble bubble--mine";
   bubble.textContent = text;
   row.appendChild(bubble);
+  row.appendChild(createCopyButton(() => text));
   els.chatLog.appendChild(row);
   els.chatLog.scrollTop = els.chatLog.scrollHeight;
 }
@@ -617,9 +661,32 @@ export function createChatAssistantBubble() {
   const bubble = document.createElement("div");
   bubble.className = "bubble bubble--theirs";
   row.appendChild(bubble);
+  // .innerText (not .textContent) so the copy preserves the reader's visual
+  // line breaks/paragraph spacing from the rendered markdown, rather than
+  // smashing block-level content together with no separation.
+  row.appendChild(createCopyButton(() => bubble.innerText));
   els.chatLog.appendChild(row);
   els.chatLog.scrollTop = els.chatLog.scrollHeight;
   return bubble;
+}
+
+/** Renders the predefined quick-prompt chips (content lives in js/chatPrompts.js).
+ *  Clicking one populates the chat input for review rather than sending immediately —
+ *  a misclick shouldn't be able to fire off an AI call unintentionally. */
+function renderChatPromptPresets() {
+  els.chatPromptPresets.innerHTML = "";
+  CHAT_PROMPT_PRESETS.forEach((preset) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "prompt-chip";
+    chip.textContent = preset.label;
+    chip.title = preset.prompt;
+    chip.addEventListener("click", () => {
+      els.chatInput.value = preset.prompt;
+      els.chatInput.focus();
+    });
+    els.chatPromptPresets.appendChild(chip);
+  });
 }
 
 // ---- Toasts --------------------------------------------------------------
@@ -645,10 +712,89 @@ export function showToast(message, type = "info", durationMs = 4000) {
  * of callback functions supplied by main.js; ui.js never contains business
  * logic itself, only DOM plumbing.
  */
+// ---- Resizable panel ---------------------------------------------------------
+
+const SIDEBAR_WIDTH_STORAGE_KEY = "meetingai:sidebarWidth";
+const MIN_SIDEBAR_WIDTH = 300;
+const MAX_SIDEBAR_WIDTH = 640;
+const DEFAULT_SIDEBAR_WIDTH = 400;
+
+function loadSidebarWidth() {
+  try {
+    const stored = Number(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+    if (stored && stored >= MIN_SIDEBAR_WIDTH && stored <= MAX_SIDEBAR_WIDTH) return stored;
+  } catch (_) {
+    /* ignore */
+  }
+  return DEFAULT_SIDEBAR_WIDTH;
+}
+
+function applySidebarWidth(px) {
+  document.documentElement.style.setProperty("--sidebar-width", `${px}px`);
+  try {
+    localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(px));
+  } catch (_) {
+    /* ignore — the width just won't be remembered next time */
+  }
+}
+
+/** Wires up the draggable divider between the transcript panel and the sidebar.
+ *  This is pure display/layout preference (like the theme toggle), so it manages
+ *  its own dedicated localStorage key directly rather than going through the
+ *  app's settings object in storage.js, which is for actual app configuration. */
+function setupPanelResize() {
+  const handle = els.panelResizeHandle;
+  if (!handle) return;
+
+  applySidebarWidth(loadSidebarWidth());
+
+  let dragging = false;
+
+  function onPointerMove(e) {
+    if (!dragging) return;
+    const layoutEl = handle.parentElement;
+    const containerRight = layoutEl.getBoundingClientRect().right;
+    const newWidth = Math.round(containerRight - e.clientX);
+    applySidebarWidth(Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, newWidth)));
+  }
+
+  function endDrag() {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove("is-dragging");
+    document.body.classList.remove("is-resizing-panel");
+    document.removeEventListener("pointermove", onPointerMove);
+    document.removeEventListener("pointerup", endDrag);
+  }
+
+  handle.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    handle.classList.add("is-dragging");
+    document.body.classList.add("is-resizing-panel");
+    document.addEventListener("pointermove", onPointerMove);
+    document.addEventListener("pointerup", endDrag);
+    e.preventDefault();
+  });
+
+  // Keyboard accessibility: arrow keys nudge the width in 16px steps.
+  handle.addEventListener("keydown", (e) => {
+    const current = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-width"), 10) || DEFAULT_SIDEBAR_WIDTH;
+    if (e.key === "ArrowLeft") {
+      applySidebarWidth(Math.min(MAX_SIDEBAR_WIDTH, current + 16));
+      e.preventDefault();
+    } else if (e.key === "ArrowRight") {
+      applySidebarWidth(Math.max(MIN_SIDEBAR_WIDTH, current - 16));
+      e.preventDefault();
+    }
+  });
+}
+
 export function bindControls(handlers) {
   cacheElements();
   setupKeyVisibilityToggles();
   setupSettingsTabs();
+  setupPanelResize();
+  renderChatPromptPresets();
 
   els.btnStart.addEventListener("click", handlers.onStart);
   els.btnPause.addEventListener("click", handlers.onPause);
