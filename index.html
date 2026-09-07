@@ -98,7 +98,7 @@
     <!-- ============================== Main content ============================== -->
     <main class="layout">
 
-      <section class="panel panel--bordered">
+      <section class="panel">
         <div class="panel__header">
           <h2 class="panel__title">Live Transcript</h2>
           <div class="panel__actions">
@@ -123,6 +123,16 @@
           </div>
         </div>
       </section>
+
+      <div
+        id="panel-resize-handle"
+        class="panel-resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Drag the panel left or right to resize the display area."
+        title="Drag the panel left or right to resize the display area."
+        tabindex="0"
+      ></div>
 
       <aside class="sidebar">
         <div class="tabs">
@@ -175,6 +185,7 @@
               Ask a question about this meeting — the assistant uses the live transcript as context.
             </div>
           </div>
+          <div id="chat-prompt-presets" class="chat__presets"></div>
           <form id="chat-form" class="chat__form">
             <input id="chat-input" type="text" autocomplete="off" placeholder="Ask about this meeting…" aria-label="Ask about this meeting" class="chat__input" />
             <button type="submit" class="btn btn-primary">Send</button>
