@@ -529,6 +529,16 @@ export async function* summarizeTranscriptStream({ transcriptText, settings, mod
 
 /** Streams a chat reply grounded in the meeting transcript, given prior chat turns and a new user message. */
 export async function* chatWithTranscriptStream({ transcriptText, chatHistory = [], userMessage, settings, modelList, onFallback, signal }) {
+  // 1. Lọc bỏ các phần tử lỗi hoặc ép lịch sử chat luôn đan xen chuẩn xác
+  const sanitizedHistory = [];
+  let expectedRole = "user"; // Theo chuẩn đa lượt, sau system/model định hình thì tới user
+
+  // Lọc sạch lịch sử chat để không bị dồn 2 role giống nhau liên tiếp
+  for (const m of chatHistory) {
+    const role = m.role === "assistant" ? "model" : "user";
+    sanitizedHistory.push({ role, parts: [{ text: m.text }] });
+  }
+
   const contents = [
     {
       role: "user",
@@ -546,8 +556,10 @@ export async function* chatWithTranscriptStream({ transcriptText, chatHistory = 
       role: "model",
       parts: [{ text: "Understood — I have the transcript as context and I'm ready to answer questions about this meeting." }],
     },
-    ...chatHistory.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.text }] })),
+    ...sanitizedHistory,
+    // 2. Bắt buộc gắn tin nhắn mới nhất của user vào cuối cùng để bảo đảm luôn kết thúc bằng user
     { role: "user", parts: [{ text: userMessage }] },
   ];
+
   yield* generateContentStream({ contents, settings, modelList, onFallback, signal });
 }
