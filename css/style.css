@@ -1,0 +1,503 @@
+/* =============================================================================
+   css/style.css
+   Design system for the Meeting AI Assistant — Notion-meets-Linear aesthetic:
+   restrained neutral surfaces, hairline borders instead of drop shadows,
+   generous whitespace, and a charcoal/slate dark theme as a first-class
+   citizen alongside a clean light theme. Inter throughout.
+
+   Theming: <html> carries data-theme="light" | "dark" when the person has
+   made an explicit choice (see the small inline script in index.html's
+   <head>, which also prevents a flash of the wrong theme on load). With no
+   explicit choice, the OS-level prefers-color-scheme is honored instead.
+   ============================================================================= */
+
+/* ---------------------------------------------------------------------------
+   1. Design tokens
+   --------------------------------------------------------------------------- */
+
+:root {
+  /* Light theme (default) — warm off-whites, soft near-black text, restrained accent */
+  --bg: #ffffff;
+  --bg-canvas: #fbfbfa;
+  --bg-elevated: #ffffff;
+  --bg-hover: #f2f1ef;
+  --bg-active: #eae9e6;
+
+  --border: #e9e8e6;
+  --border-strong: #dcdad7;
+
+  --text-primary: #201f1e;
+  --text-secondary: #6b6a68;
+  --text-muted: #9b9a97;
+  --text-on-accent: #ffffff;
+
+  --accent: #5e6ad2;
+  --accent-hover: #4c57c0;
+  --accent-soft: #eef0fb;
+
+  --accent-secondary: #2f8fd1;
+
+  --success: #2f9e6e;
+  --success-soft: #e7f6ef;
+  --warning: #b9791f;
+  --warning-soft: #fbf1e0;
+  --danger: #d13438;
+  --danger-soft: #fbe9e9;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-full: 999px;
+
+  --shadow-md: 0 8px 24px rgba(20, 20, 20, 0.1);
+  --shadow-lg: 0 16px 48px rgba(20, 20, 20, 0.16);
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #17181c;
+    --bg-canvas: #1b1c20;
+    --bg-elevated: #202127;
+    --bg-hover: #26272e;
+    --bg-active: #2c2d35;
+
+    --border: #2b2c33;
+    --border-strong: #383a42;
+
+    --text-primary: #edecee;
+    --text-secondary: #a2a1a8;
+    --text-muted: #717079;
+    --text-on-accent: #ffffff;
+
+    --accent: #7b85e8;
+    --accent-hover: #939ceb;
+    --accent-soft: #262a45;
+
+    --accent-secondary: #56b6e6;
+
+    --success: #4cbe8b;
+    --success-soft: #163527;
+    --warning: #e2a53f;
+    --warning-soft: #3a2c11;
+    --danger: #ea6a6d;
+    --danger-soft: #3a1e1f;
+
+    --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.36);
+    --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.48);
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #17181c;
+  --bg-canvas: #1b1c20;
+  --bg-elevated: #202127;
+  --bg-hover: #26272e;
+  --bg-active: #2c2d35;
+
+  --border: #2b2c33;
+  --border-strong: #383a42;
+
+  --text-primary: #edecee;
+  --text-secondary: #a2a1a8;
+  --text-muted: #717079;
+  --text-on-accent: #ffffff;
+
+  --accent: #7b85e8;
+  --accent-hover: #939ceb;
+  --accent-soft: #262a45;
+
+  --accent-secondary: #56b6e6;
+
+  --success: #4cbe8b;
+  --success-soft: #163527;
+  --warning: #e2a53f;
+  --warning-soft: #3a2c11;
+  --danger: #ea6a6d;
+  --danger-soft: #3a1e1f;
+
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.36);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.48);
+
+  color-scheme: dark;
+}
+
+/* ---------------------------------------------------------------------------
+   2. Reset + base
+   --------------------------------------------------------------------------- */
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+h1, h2, h3, p, ul, form { margin: 0; padding: 0; }
+ul { list-style: none; }
+button { font-family: inherit; cursor: pointer; }
+input, select, textarea { font-family: inherit; }
+svg { display: block; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background-color: var(--border-strong); border-radius: var(--radius-full); }
+::-webkit-scrollbar-track { background: transparent; }
+
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Small generic utilities (kept intentionally minimal — everything else below is a
+   purpose-built component class, not a utility-class system) */
+.hidden { display: none !important; }
+.opacity-40 { opacity: 0.4; }
+.cursor-not-allowed { cursor: not-allowed; }
+
+/* ---------------------------------------------------------------------------
+   3. App shell + top bar
+   --------------------------------------------------------------------------- */
+
+.app { height: 100%; display: flex; flex-direction: column; }
+
+.topbar {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  padding: 0.75rem 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.topbar__brand { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
+.topbar__logo {
+  height: 2rem; width: 2rem; border-radius: var(--radius-md);
+  background: var(--accent); color: var(--text-on-accent);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.topbar__logo svg { height: 1.2rem; width: 1.2rem; }
+.topbar__title { font-size: 0.875rem; font-weight: 600; color: var(--text-primary); line-height: 1.2; }
+.topbar__status { display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.15rem; }
+.topbar__actions { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
+
+.status-dot { display: inline-block; height: 0.5rem; width: 0.5rem; border-radius: 999px; background: var(--border-strong); }
+.status-dot--idle { background: var(--border-strong); }
+.status-dot--listening { background: var(--success); animation: pulse-dot 1.6s ease-in-out infinite; }
+.status-dot--stopping { background: var(--text-muted); animation: pulse-dot 1.6s ease-in-out infinite; }
+.status-dot--paused { background: var(--warning); }
+.status-dot--stopped { background: var(--text-muted); }
+.status-dot--error { background: var(--danger); }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot--listening, .status-dot--stopping {
+    animation: none;
+  }
+}
+
+.meters { display: none; align-items: center; gap: 0.75rem; margin-right: 0.25rem; }
+@media (min-width: 640px) { .meters { display: flex; } }
+.meter { display: flex; align-items: center; gap: 0.35rem; }
+.meter__label { font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+.meter__track { width: 3.5rem; height: 0.3rem; border-radius: 999px; background: var(--bg-active); overflow: hidden; }
+.meter__fill { height: 100%; border-radius: 999px; transition: width 75ms linear; }
+.meter__fill--mic { background: var(--success); }
+.meter__fill--system { background: var(--accent-secondary); }
+
+/* ---------------------------------------------------------------------------
+   4. Buttons
+   --------------------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  font-size: 0.8125rem; font-weight: 500; line-height: 1;
+  padding: 0.55rem 0.9rem; border-radius: var(--radius-md);
+  border: 1px solid transparent; background: none; color: var(--text-primary);
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, filter 0.15s ease;
+  white-space: nowrap;
+}
+.btn:disabled { cursor: not-allowed; }
+
+.btn-primary { background: var(--accent); color: var(--text-on-accent); }
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+
+/* Pause/Resume/Stop use subtle tinted-background tokens rather than solid
+   fills, so the control cluster reads as one cohesive, minimal group — color
+   alone still carries the semantic difference between them. */
+.btn-warning { background: var(--warning-soft); color: var(--warning); border-color: transparent; }
+.btn-warning:hover:not(:disabled) { border-color: var(--warning); }
+
+.btn-success { background: var(--success-soft); color: var(--success); border-color: transparent; }
+.btn-success:hover:not(:disabled) { border-color: var(--success); }
+
+.btn-danger { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
+.btn-danger:hover:not(:disabled) { border-color: var(--danger); }
+
+.btn-subtle {
+  background: var(--bg); color: var(--text-secondary);
+  border-color: var(--border); font-size: 0.75rem; padding: 0.4rem 0.7rem;
+}
+.btn-subtle:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+
+.btn-icon {
+  height: 2.25rem; width: 2.25rem; padding: 0; justify-content: center;
+  border: 1px solid var(--border); color: var(--text-secondary); background: var(--bg);
+}
+.btn-icon:hover { background: var(--bg-hover); color: var(--text-primary); }
+.btn-icon svg { height: 1.1rem; width: 1.1rem; }
+
+/* Theme toggle shows one of two icons depending on the active theme */
+.theme-toggle .icon-sun { display: none; }
+.theme-toggle .icon-moon { display: block; }
+:root[data-theme="dark"] .theme-toggle .icon-sun { display: block; }
+:root[data-theme="dark"] .theme-toggle .icon-moon { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .theme-toggle .icon-sun { display: block; }
+  :root:not([data-theme="light"]) .theme-toggle .icon-moon { display: none; }
+}
+
+/* Notion-style dropdown menu (used by the single Export button) */
+.dropdown { position: relative; display: inline-block; }
+.dropdown__menu {
+  position: absolute; top: calc(100% + 4px); right: 0; min-width: 200px;
+  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md); padding: 0.3rem; z-index: 30;
+}
+.dropdown__item {
+  display: block; width: 100%; text-align: left; padding: 0.5rem 0.65rem;
+  font-size: 0.8125rem; border-radius: var(--radius-sm); background: none; border: none; color: var(--text-primary);
+}
+.dropdown__item:hover { background: var(--bg-hover); }
+
+/* ---------------------------------------------------------------------------
+   5. Banners
+   --------------------------------------------------------------------------- */
+
+.banner { font-size: 0.8125rem; padding: 0.5rem 1.25rem; border-bottom: 1px solid; }
+.banner--error { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-soft); }
+.banner--warning { background: var(--warning-soft); color: var(--warning); border-color: var(--warning-soft); font-size: 0.75rem; }
+
+/* ---------------------------------------------------------------------------
+   6. Main layout + panels
+   --------------------------------------------------------------------------- */
+
+.layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr; }
+@media (min-width: 1024px) { .layout { grid-template-columns: 1fr 400px; } }
+
+.panel { min-height: 0; display: flex; flex-direction: column; }
+.panel--bordered { border-right: 1px solid var(--border); }
+
+.panel__header {
+  padding: 0.9rem 1.25rem; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.panel__title { font-size: 0.8125rem; font-weight: 600; color: var(--text-secondary); }
+.panel__actions { display: flex; align-items: center; gap: 0.5rem; }
+
+/* ---------------------------------------------------------------------------
+   7. Transcript + chat bubbles (shared component)
+   --------------------------------------------------------------------------- */
+
+.transcript { flex: 1; min-height: 0; overflow-y: auto; padding: 1.25rem; display: flex; flex-direction: column; gap: 0.75rem; }
+
+.transcript__empty, .summary__empty, .chat__empty {
+  text-align: center; color: var(--text-muted); font-size: 0.875rem; padding: 4rem 0;
+}
+.transcript__empty {
+  height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.5rem;
+}
+.transcript__empty svg { height: 2.25rem; width: 2.25rem; color: var(--border-strong); }
+.transcript__empty strong { color: var(--text-secondary); font-weight: 500; }
+
+.bubble-row { display: flex; flex-direction: column; gap: 0.25rem; }
+.bubble-row--mine { align-items: flex-end; }
+.bubble-row--theirs { align-items: flex-start; }
+.bubble-row--interim { opacity: 0.6; }
+
+.bubble__meta { display: flex; gap: 0.4rem; font-size: 0.7rem; color: var(--text-muted); padding: 0 0.25rem; }
+
+.bubble {
+  max-width: 85%; border-radius: var(--radius-lg);
+  padding: 0.65rem 1rem; font-size: 0.875rem; line-height: 1.55;
+}
+.bubble--mine { background: var(--accent); color: var(--text-on-accent); border-bottom-right-radius: 0.35rem; }
+.bubble--theirs { background: var(--bg); border: 1px solid var(--border); border-bottom-left-radius: 0.35rem; }
+.bubble--interim { border: 1px dashed var(--border-strong); color: var(--text-muted); font-style: italic; background: transparent; }
+
+/* ---------------------------------------------------------------------------
+   8. Sidebar tabs
+   --------------------------------------------------------------------------- */
+
+.sidebar { min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+.tabs { display: flex; border-bottom: 1px solid var(--border); }
+.tab {
+  flex: 1; padding: 0.8rem 0; font-size: 0.8125rem; font-weight: 500;
+  color: var(--text-muted); background: none; border: none; border-bottom: 2px solid transparent;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.tab:hover { color: var(--text-secondary); }
+.tab.is-active { color: var(--text-primary); border-color: var(--accent); }
+
+/* Compact engine status card — always visible above Summary/Chat */
+.engine-status {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem 1rem;
+  padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--border);
+  background: var(--bg-canvas);
+}
+.engine-stat { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+.engine-stat__label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+.engine-stat__value {
+  font-size: 0.8125rem; font-weight: 500; color: var(--text-primary);
+  display: flex; align-items: center; gap: 0.35rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------------------
+   9. Summary panel + AI markdown output
+   --------------------------------------------------------------------------- */
+
+.summary { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.summary__toolbar { padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.summary__hint { font-size: 0.7rem; color: var(--text-muted); }
+.summary__body { flex: 1; min-height: 0; overflow-y: auto; padding: 1.25rem; }
+
+#summary-output { font-size: 0.875rem; line-height: 1.65; color: var(--text-primary); }
+#summary-output h1, #summary-output h2, #summary-output h3 { font-weight: 600; margin: 0.9rem 0 0.4rem; }
+#summary-output h2 { font-size: 1rem; }
+#summary-output h3 { font-size: 0.925rem; }
+#summary-output ul { list-style: disc; padding-left: 1.25rem; margin: 0.35rem 0; }
+#summary-output p { margin: 0.4rem 0; }
+#summary-output strong { font-weight: 600; }
+
+.code-block {
+  background: var(--bg-hover); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 0.75rem 1rem; overflow-x: auto; font-size: 0.8125rem; margin: 0.5rem 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.inline-code {
+  background: var(--bg-hover); border-radius: 4px; padding: 0.1rem 0.35rem; font-size: 0.85em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ---------------------------------------------------------------------------
+   10. Chat panel
+   --------------------------------------------------------------------------- */
+
+.chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.chat__log { flex: 1; min-height: 0; overflow-y: auto; padding: 1.25rem; display: flex; flex-direction: column; gap: 0.75rem; }
+.chat__form { border-top: 1px solid var(--border); padding: 0.75rem; display: flex; align-items: center; gap: 0.5rem; }
+.chat__input {
+  flex: 1; font-size: 0.875rem; border-radius: var(--radius-md); border: 1px solid var(--border);
+  padding: 0.55rem 0.75rem; background: var(--bg); color: var(--text-primary);
+}
+.chat__input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* ---------------------------------------------------------------------------
+   11. Settings modal + form fields
+   --------------------------------------------------------------------------- */
+
+.modal-overlay { position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+.modal-overlay::before { content: ""; position: absolute; inset: 0; background: rgba(15, 15, 15, 0.45); }
+
+.modal {
+  position: relative; background: var(--bg-elevated); width: 100%; max-width: 32rem;
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); border: 1px solid var(--border);
+  max-height: 90vh; display: flex; flex-direction: column;
+}
+.modal__header { padding: 1rem 1.5rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.modal__header h2 { font-size: 0.875rem; font-weight: 600; }
+.modal__close { color: var(--text-muted); background: none; border: none; padding: 0.25rem; border-radius: var(--radius-sm); }
+.modal__close:hover { color: var(--text-primary); background: var(--bg-hover); }
+.modal__close svg { height: 1.1rem; width: 1.1rem; }
+.modal__body { padding: 1.25rem 1.5rem 1.5rem; overflow-y: auto; display: flex; flex-direction: column; gap: 1.25rem; }
+.modal__footer { padding-top: 0.25rem; display: flex; justify-content: flex-end; gap: 0.5rem; }
+
+.notice {
+  font-size: 0.75rem; line-height: 1.55; color: var(--text-secondary);
+  background: var(--bg-canvas); border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: 0.65rem 0.85rem;
+}
+
+.field-stack { display: flex; flex-direction: column; gap: 0.75rem; }
+.field { display: flex; flex-direction: column; gap: 0.3rem; }
+.field__label { font-size: 0.75rem; font-weight: 500; color: var(--text-secondary); }
+.field__row { display: flex; gap: 0.5rem; }
+.field__hint { font-size: 0.7rem; color: var(--text-muted); margin-top: 0.15rem; }
+.field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+
+.input, .select {
+  flex: 1; font-size: 0.875rem; border-radius: var(--radius-md); border: 1px solid var(--border);
+  padding: 0.55rem 0.75rem; background: var(--bg); color: var(--text-primary); width: 100%;
+}
+.input:focus, .select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.select:disabled { background-color: var(--bg-canvas); color: var(--text-muted); }
+
+/* Custom minimal chevron replaces the OS-native select arrow, with proper
+   horizontal padding so the arrow never collides with option text. */
+.select {
+  appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  padding-right: 2.25rem;
+  background-repeat: no-repeat;
+  background-position: right 0.7rem center;
+  background-size: 0.9rem;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236b6a68' stroke-width='2'><path stroke-linecap='round' stroke-linejoin='round' d='M6 9l6 6 6-6'/></svg>");
+}
+:root[data-theme="dark"] .select {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a2a1a8' stroke-width='2'><path stroke-linecap='round' stroke-linejoin='round' d='M6 9l6 6 6-6'/></svg>");
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .select {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a2a1a8' stroke-width='2'><path stroke-linecap='round' stroke-linejoin='round' d='M6 9l6 6 6-6'/></svg>");
+  }
+}
+
+/* When the OS/browser is in a forced-colors (high-contrast) mode, it repaints
+   native form-control chrome — including disabled <select> elements — using
+   system colors, on top of whatever we've drawn. Fighting that produces a
+   doubled arrow and garbled text (our SVG chevron layered under the native
+   one). Instead we bail out entirely here and let the browser render its own
+   correctly-themed native control. */
+@media (forced-colors: active) {
+  .select {
+    appearance: auto;
+    -webkit-appearance: auto;
+    background-image: none;
+    padding-right: 0.75rem;
+  }
+}
+
+.help-box { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0.75rem; background: var(--bg-canvas); }
+.help-box label { display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.875rem; color: var(--text-primary); }
+.help-box input[type="checkbox"] { margin-top: 0.2rem; accent-color: var(--accent); }
+.help-box__text { font-size: 0.7rem; color: var(--text-secondary); margin-top: 0.5rem; line-height: 1.55; }
+
+/* ---------------------------------------------------------------------------
+   12. Toasts
+   --------------------------------------------------------------------------- */
+
+.toast-stack { position: fixed; bottom: 1rem; right: 1rem; z-index: 50; display: flex; flex-direction: column; gap: 0.5rem; align-items: flex-end; }
+.toast {
+  border-radius: var(--radius-md); padding: 0.65rem 1rem; font-size: 0.8125rem;
+  box-shadow: var(--shadow-md); transition: opacity 0.3s ease;
+}
+/* text-primary/bg are swapped per theme so contrast stays correct automatically in both modes */
+.toast--info { background: var(--text-primary); color: var(--bg); }
+.toast--success { background: var(--success); color: #ffffff; }
+.toast--error { background: var(--danger); color: #ffffff; }
+.toast.is-leaving { opacity: 0; }

@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+
+  <!-- Applied before first paint so switching themes never flashes the wrong one -->
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem("meetingai:theme");
+        if (stored === "light" || stored === "dark") {
+          document.documentElement.setAttribute("data-theme", stored);
+        }
+      } catch (_) {
+        /* localStorage unavailable — falls back to the OS theme via CSS */
+      }
+    })();
+  </script>
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Meeting AI Assistant</title>
+  <meta name="description" content="A private, client-side meeting assistant: live transcription, AI summaries, and transcript-grounded chat." />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <link rel="icon" type="image/png" href="assets/favicon.png" />
+
+  <link rel="stylesheet" href="css/style.css" />
+
+  <!-- DOMPurify (CDN) — every piece of AI-generated HTML is sanitized through this before it touches the DOM -->
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.14/dist/purify.min.js"></script>
+</head>
+<body>
+
+  <div id="app" class="app">
+
+    <!-- ============================== Top bar ============================== -->
+    <header class="topbar">
+      <div class="topbar__brand">
+        <div class="topbar__logo">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <rect x="3" y="4" width="12" height="8" rx="2.5" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M7 12l-1.6 2.8 3.4-1.4" stroke-linecap="round" stroke-linejoin="round" />
+            <rect x="9" y="10" width="12" height="8.5" rx="2.5" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M17 18.5l1.6 2.8-3.4-1.2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </div>
+        <div>
+          <h1 class="topbar__title">Meeting AI Assistant</h1>
+          <div id="status-pill" class="topbar__status">
+            <span id="status-dot" class="status-dot status-dot--idle"></span>
+            <span id="status-text">Ready</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="topbar__actions">
+        <div class="meters">
+          <div class="meter">
+            <span class="meter__label">Mic</span>
+            <div class="meter__track"><div id="mic-level-bar" class="meter__fill meter__fill--mic" style="width:0%"></div></div>
+          </div>
+          <div class="meter">
+            <span class="meter__label">Sys</span>
+            <div class="meter__track"><div id="system-level-bar" class="meter__fill meter__fill--system" style="width:0%"></div></div>
+          </div>
+        </div>
+
+        <button id="btn-start" type="button" class="btn btn-primary">Start Meeting</button>
+        <button id="btn-pause" type="button" class="btn btn-warning hidden">Pause</button>
+        <button id="btn-resume" type="button" class="btn btn-success hidden">Resume</button>
+        <button id="btn-stop" type="button" class="btn btn-danger hidden">Stop</button>
+
+        <button id="btn-theme-toggle" type="button" class="btn btn-icon theme-toggle" title="Toggle theme" aria-label="Toggle light and dark theme">
+          <svg class="icon-sun" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1.5M12 19.5V21M4.5 12H3M21 12h-1.5M5.6 5.6l1.1 1.1M17.3 17.3l1.1 1.1M18.4 5.6l-1.1 1.1M6.7 17.3l-1.1 1.1M16.5 12a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0z" />
+          </svg>
+          <svg class="icon-moon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 12.79A9 9 0 1111.21 3a7 7 0 009.79 9.79z" />
+          </svg>
+        </button>
+
+        <button id="btn-open-settings" type="button" title="Settings" aria-label="Settings" class="btn btn-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <div id="unsupported-banner" class="hidden banner banner--error"></div>
+    <div id="fallback-banner" class="hidden banner banner--warning"></div>
+
+    <!-- ============================== Main content ============================== -->
+    <main class="layout">
+
+      <section class="panel panel--bordered">
+        <div class="panel__header">
+          <h2 class="panel__title">Live Transcript</h2>
+          <div class="panel__actions">
+            <button id="btn-clear-meeting" type="button" disabled class="btn btn-subtle opacity-40 cursor-not-allowed">Clear</button>
+            <div class="dropdown">
+              <button id="btn-export" type="button" disabled class="btn btn-subtle opacity-40 cursor-not-allowed">Export</button>
+              <div id="export-menu" class="hidden dropdown__menu" role="menu">
+                <button type="button" id="btn-export-md" class="dropdown__item" role="menuitem">Export as Markdown (.md)</button>
+                <button type="button" id="btn-export-txt" class="dropdown__item" role="menuitem">Export as Plain Text (.txt)</button>
+              </div>
+            </div>
+            <button id="btn-download-audio" type="button" disabled class="btn btn-subtle opacity-40 cursor-not-allowed">Download audio</button>
+          </div>
+        </div>
+
+        <div id="transcript-log" aria-live="polite" class="transcript">
+          <div id="transcript-empty-state" class="transcript__empty">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
+            </svg>
+            <p>Press <strong>Start Meeting</strong> to begin live transcription.</p>
+          </div>
+        </div>
+      </section>
+
+      <aside class="sidebar">
+        <div class="tabs">
+          <button id="tab-btn-summary" type="button" class="tab is-active">Summary</button>
+          <button id="tab-btn-chat" type="button" class="tab">Chat</button>
+        </div>
+
+        <div class="engine-status">
+          <div class="engine-stat">
+            <span class="engine-stat__label">Engine</span>
+            <span class="engine-stat__value"><span id="engine-status-dot" class="status-dot status-dot--idle"></span><span id="engine-status-text">Standby</span></span>
+          </div>
+          <div class="engine-stat">
+            <span class="engine-stat__label">Active model</span>
+            <span id="engine-model-value" class="engine-stat__value">—</span>
+          </div>
+          <div class="engine-stat">
+            <span class="engine-stat__label">Last call</span>
+            <span id="engine-last-call-value" class="engine-stat__value">—</span>
+          </div>
+          <div class="engine-stat">
+            <span class="engine-stat__label">Fallbacks used</span>
+            <span id="engine-fallbacks-value" class="engine-stat__value">0</span>
+          </div>
+        </div>
+
+        <div id="summary-panel" class="summary">
+          <div class="summary__toolbar">
+            <span class="summary__hint">AI-generated — verify anything important.</span>
+            <div class="panel__actions">
+              <button id="btn-copy-summary" type="button" class="btn btn-subtle">Copy</button>
+              <button id="btn-summarize" type="button" disabled class="btn btn-primary opacity-40 cursor-not-allowed" style="font-size:.75rem; padding:.4rem .75rem;">Summarize</button>
+            </div>
+          </div>
+          <div class="summary__body">
+            <div id="summary-empty-state" class="summary__empty">
+              No summary yet — click <strong>Summarize</strong> once there's a transcript.
+            </div>
+            <div id="summary-output"></div>
+          </div>
+        </div>
+
+        <div id="chat-panel" class="hidden chat">
+          <div id="chat-log" class="chat__log">
+            <div id="chat-empty-state" class="chat__empty">
+              Ask a question about this meeting — the assistant uses the live transcript as context.
+            </div>
+          </div>
+          <form id="chat-form" class="chat__form">
+            <input id="chat-input" type="text" autocomplete="off" placeholder="Ask about this meeting…" aria-label="Ask about this meeting" class="chat__input" />
+            <button type="submit" class="btn btn-primary">Send</button>
+          </form>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <!-- ============================== Settings modal ============================== -->
+  <div id="settings-modal" class="hidden modal-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+      <div class="modal__header">
+        <h2 id="settings-modal-title">Settings</h2>
+        <button id="btn-close-settings" type="button" class="modal__close" aria-label="Close settings">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <form id="settings-form" class="modal__body">
+
+        <p class="notice">
+          Keys are stored only in this browser's local storage and are sent directly to Google / Groq when you use the app —
+          never to any server of ours (there isn't one). Your live transcript and any AI summary are also kept in this
+          browser's local storage while a meeting is running, purely so a reload doesn't lose your work — that data is
+          cleared as soon as you start a new meeting, or you can clear it yourself below. Anyone with access to this
+          browser profile could read any of this, so use keys (and discuss meetings) you're comfortable keeping client-side.
+        </p>
+
+        <div class="field-stack">
+          <div class="field">
+            <label for="input-gemini-key-primary" class="field__label">Primary Gemini API key</label>
+            <div class="field__row">
+              <input id="input-gemini-key-primary" type="password" autocomplete="off" class="input" />
+              <button type="button" data-toggle-visibility="input-gemini-key-primary" class="btn btn-icon" aria-label="Show API key"></button>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="input-gemini-key-secondary" class="field__label">Secondary Gemini API key (Project B, optional)</label>
+            <div class="field__row">
+              <input id="input-gemini-key-secondary" type="password" autocomplete="off" class="input" />
+              <button type="button" data-toggle-visibility="input-gemini-key-secondary" class="btn btn-icon" aria-label="Show API key"></button>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="input-groq-key" class="field__label">Groq API key (fallback, optional)</label>
+            <div class="field__row">
+              <input id="input-groq-key" type="password" autocomplete="off" class="input" />
+              <button type="button" data-toggle-visibility="input-groq-key" class="btn btn-icon" aria-label="Show API key"></button>
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="select-gemini-model" class="field__label">Gemini model</label>
+          <div class="field__row">
+            <select id="select-gemini-model" class="select"></select>
+            <button id="btn-refresh-models" type="button" class="btn btn-icon" aria-label="Refresh model list" title="Refresh model list">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+              </svg>
+            </button>
+          </div>
+          <input id="input-gemini-model-manual" type="text" autocomplete="off" placeholder="Or type a model name manually, e.g. gemini-2.5-flash" class="input" style="margin-top:.4rem;" />
+          <p class="field__hint">Fetched live from Google's model list. If the fetch fails, type a model name above — it takes precedence over the dropdown. Rate-limit fallback tries a lighter model on this list before switching keys.</p>
+        </div>
+
+        <div class="field">
+          <label for="select-groq-model" class="field__label">Groq fallback model</label>
+          <select id="select-groq-model" class="select">
+            <option value="llama-3.3-70b-versatile">Llama 3.3 70B Versatile</option>
+            <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant</option>
+            <option value="gemma2-9b-it">Gemma 2 9B</option>
+          </select>
+          <input id="input-groq-model-manual" type="text" autocomplete="off" placeholder="Or type a Groq model name manually" class="input" style="margin-top:.4rem;" />
+          <p class="field__hint">Used only when both Gemini keys are exhausted or rate-limited.</p>
+        </div>
+
+        <div class="field">
+          <label for="select-mic-device" class="field__label">Microphone</label>
+          <select id="select-mic-device" class="select">
+            <option value="">System default</option>
+          </select>
+          <p class="field__hint">Real device names appear here only after the browser has been granted microphone access at least once — start a meeting, then reopen Settings.</p>
+        </div>
+
+        <div class="field-grid">
+          <div class="field">
+            <label for="select-mic-language" class="field__label">Your language</label>
+            <select id="select-mic-language" class="select">
+              <option value="en-US">English (US)</option>
+              <option value="en-GB">English (UK)</option>
+              <option value="es-ES">Spanish</option>
+              <option value="fr-FR">French</option>
+              <option value="de-DE">German</option>
+              <option value="pt-BR">Portuguese (BR)</option>
+              <option value="hi-IN">Hindi</option>
+              <option value="ja-JP">Japanese</option>
+              <option value="zh-CN">Chinese (Simplified)</option>
+              <option value="vi-VN">Vietnamese</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="select-system-language" class="field__label">Meeting audio language</label>
+            <select id="select-system-language" disabled class="select">
+              <option value="en-US">English (US)</option>
+              <option value="en-GB">English (UK)</option>
+              <option value="es-ES">Spanish</option>
+              <option value="fr-FR">French</option>
+              <option value="de-DE">German</option>
+              <option value="pt-BR">Portuguese (BR)</option>
+              <option value="hi-IN">Hindi</option>
+              <option value="ja-JP">Japanese</option>
+              <option value="zh-CN">Chinese (Simplified)</option>
+              <option value="vi-VN">Vietnamese</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="help-box">
+          <label>
+            <input id="checkbox-enable-system-channel" type="checkbox" />
+            <span>Also transcribe meeting/system audio (a second channel, in addition to your mic)</span>
+          </label>
+          <p id="system-channel-help" class="hidden help-box__text">
+            Browsers don't let a page choose which device speech recognition listens to — it always uses whatever the OS
+            hands it. For this channel to pick up remote participants, route your meeting audio to a virtual loopback
+            input (e.g. BlackHole on macOS, VB-Audio Cable on Windows) <em>before</em> starting, so recognition can hear it.
+          </p>
+        </div>
+
+        <div class="field">
+          <span class="field__label">Stored data</span>
+          <div class="field__row">
+            <button id="btn-clear-api-keys" type="button" class="btn btn-subtle">Clear saved API keys</button>
+            <button id="btn-clear-stored-data" type="button" class="btn btn-subtle">Clear transcript recovery data</button>
+          </div>
+          <p class="field__hint">Clearing keys removes them from this browser only. Clearing recovery data removes the locally-saved transcript/summary used to recover from an accidental reload. Neither affects your other settings.</p>
+        </div>
+
+        <div class="modal__footer">
+          <button type="button" id="btn-cancel-settings" class="btn btn-subtle">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Settings</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="toast-container" class="toast-stack" aria-live="polite" role="status"></div>
+
+  <script>
+    // Self-contained theme toggle — purely presentational, so it lives here
+    // rather than in main.js/ui.js, which are only concerned with app state.
+    (function () {
+      var btn = document.getElementById("btn-theme-toggle");
+      if (!btn) return;
+      btn.addEventListener("click", function () {
+        var current = document.documentElement.getAttribute("data-theme");
+        var isDark = current ? current === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+        var next = isDark ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", next);
+        try { localStorage.setItem("meetingai:theme", next); } catch (_) { /* ignore */ }
+      });
+    })();
+  </script>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
