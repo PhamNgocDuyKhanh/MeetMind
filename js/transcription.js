@@ -23,6 +23,17 @@
  */
 
 const MAX_AUTO_RESTARTS = 6;
+// A channel that has never yet heard *anything* (not even an interim result)
+// gets a much larger restart budget than one that's already proven it can
+// hear speech. Real meetings routinely open with 10-30+ seconds of silence
+// (people joining, "can everyone hear me," etc.) — with only the strict
+// budget, that silence alone can exhaust all 6 restarts (in well under a
+// minute of pure backoff delay) before a single word has been transcribed,
+// forcing a manual Stop/Start even though nothing is actually wrong. Once
+// the channel proves it can hear something, it drops back to the strict
+// budget so a genuinely broken/flaky recognition engine still gives up
+// eventually rather than retrying forever.
+const MAX_AUTO_RESTARTS_BEFORE_FIRST_RESULT = 20;
 const RESTART_BACKOFF_BASE_MS = 400;
 
 export class TranscriptionError extends Error {
@@ -70,9 +81,16 @@ export class TranscriptionChannel {
     this._userStopped = false;
     this._paused = false;
     this._restartCount = 0;
+    this._hasHeardAnything = false; // true once any result (interim or final) has ever arrived
     this._restartTimer = null;
     this._Ctor = Ctor;
     this._currentInterimText = "";
+  }
+
+  /** The restart budget currently in effect — generous before this channel has proven
+   *  it can hear anything at all, strict afterward (see the constant's comment above). */
+  _currentRestartLimit() {
+    return this._hasHeardAnything ? MAX_AUTO_RESTARTS : MAX_AUTO_RESTARTS_BEFORE_FIRST_RESULT;
   }
 
   setLanguage(lang) {
@@ -104,6 +122,7 @@ export class TranscriptionChannel {
     this._userStopped = false;
     this._paused = false;
     this._restartCount = 0;
+    this._hasHeardAnything = false;
     this._createAndStart();
   }
 
@@ -115,6 +134,7 @@ export class TranscriptionChannel {
     recognition.maxAlternatives = 1;
 
     recognition.onresult = (event) => {
+      this._hasHeardAnything = true;
       if (this._paused) return;
       let interimText = "";
       for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -174,7 +194,7 @@ export class TranscriptionChannel {
       // SpeechRecognition silently stops after periods of silence or fixed
       // browser timeouts even in "continuous" mode — auto-restart with a
       // capped exponential backoff so a flaky mic doesn't spin-loop forever.
-      if (this._restartCount >= MAX_AUTO_RESTARTS) {
+      if (this._restartCount >= this._currentRestartLimit()) {
         this.callbacks.onError({
           channel: this.channelId,
           error: new TranscriptionError(
@@ -209,7 +229,7 @@ export class TranscriptionChannel {
         channel: this.channelId,
         error: new TranscriptionError("Could not start speech recognition.", "unknown", err),
       });
-      if (!this._userStopped && this._restartCount < MAX_AUTO_RESTARTS) {
+      if (!this._userStopped && this._restartCount < this._currentRestartLimit()) {
         const delay = RESTART_BACKOFF_BASE_MS * Math.pow(1.6, this._restartCount);
         this._restartCount += 1;
         this._restartTimer = setTimeout(() => {
