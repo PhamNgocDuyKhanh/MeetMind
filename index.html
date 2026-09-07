@@ -52,6 +52,7 @@
           <div id="status-pill" class="topbar__status">
             <span id="status-dot" class="status-dot status-dot--idle"></span>
             <span id="status-text">Ready</span>
+            <span id="meeting-timer" class="hidden meeting-timer">00:00</span>
           </div>
         </div>
       </div>
@@ -165,6 +166,10 @@
         </div>
 
         <div id="chat-panel" class="hidden chat">
+          <div class="summary__toolbar">
+            <span class="summary__hint">Grounded in the live transcript.</span>
+            <button id="btn-clear-chat" type="button" class="btn btn-subtle">Clear chat</button>
+          </div>
           <div id="chat-log" class="chat__log">
             <div id="chat-empty-state" class="chat__empty">
               Ask a question about this meeting — the assistant uses the live transcript as context.
