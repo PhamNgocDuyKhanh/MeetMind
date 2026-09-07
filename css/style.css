@@ -190,6 +190,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .topbar__logo svg { height: 1.2rem; width: 1.2rem; }
 .topbar__title { font-size: 0.875rem; font-weight: 600; color: var(--text-primary); line-height: 1.2; }
 .topbar__status { display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.15rem; }
+.meeting-timer { font-variant-numeric: tabular-nums; color: var(--text-muted); }
 .topbar__actions { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
 
 .status-dot { display: inline-block; height: 0.5rem; width: 0.5rem; border-radius: 999px; background: var(--border-strong); }
