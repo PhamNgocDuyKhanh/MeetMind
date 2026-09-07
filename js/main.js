@@ -35,6 +35,7 @@ import {
   loadPersistedSession,
   flushSessionPersistence,
   clearStoredMeetingData,
+  fixWebmDuration,
   downloadMarkdownExport,
   downloadPlainTextExport,
   downloadAudioRecording,
@@ -48,11 +49,21 @@ import {
 } from "./ai.js";
 import * as ui from "./ui.js";
 
-// How many recent chat turns get sent to the AI as context on each new
-// message. The full conversation still stays visible in the UI — this only
-// bounds what's actually transmitted, so a long chat session can't eventually
-// blow past a model's context window.
-const MAX_CHAT_HISTORY_TURNS = 12;
+// Caps the *stored* chatHistory array itself (not just what's sent per call)
+// to the most recent MAX_CHAT_HISTORY messages. Kept small deliberately: a
+// long chat session's accumulated history was a real contributor to oversized
+// API payloads on long meetings (on top of the transcript itself), and simply
+// slicing what's sent per-call wasn't enough — the array needs to actually
+// shrink so it can't keep growing unbounded in memory either.
+const MAX_CHAT_HISTORY = 10; // messages (~5 user/assistant exchanges)
+
+/** Pushes onto chatHistory and immediately re-caps it to MAX_CHAT_HISTORY. */
+function pushChatHistory(entry) {
+  state.chatHistory.push(entry);
+  if (state.chatHistory.length > MAX_CHAT_HISTORY) {
+    state.chatHistory = state.chatHistory.slice(-MAX_CHAT_HISTORY);
+  }
+}
 
 // Transcript entries, the recorded audio blob, and the summary text all live
 // in storage.js (the single owner of "data that gets exported/persisted") —
@@ -69,6 +80,9 @@ const state = {
   recordedChunks: [],
   levelMeterRaf: null,
   aiAbortController: null,
+  meetingStartedAt: null,
+  timerInterval: null,
+  recordingStartedAt: 0, // set in startRecording(), used to compute this recording's exact duration for the WebM fix
 };
 
 // ---------------------------------------------------------------------------
@@ -78,6 +92,23 @@ const state = {
 /** Wipes the transcript/chat/summary — both the underlying data (storage.js)
  *  and the on-screen view — back to a clean slate. Shared by "starting a new
  *  meeting" and the explicit "Clear" action, so both stay in sync. */
+function stopTimerLoop() {
+  if (state.timerInterval) {
+    clearInterval(state.timerInterval);
+    state.timerInterval = null;
+  }
+}
+
+function startTimerLoop() {
+  stopTimerLoop();
+  const tick = () => {
+    if (state.meetingStartedAt == null) return;
+    ui.renderMeetingTimer(Date.now() - state.meetingStartedAt);
+  };
+  tick(); // paint immediately rather than waiting a full second for the first tick
+  state.timerInterval = setInterval(tick, 1000);
+}
+
 function clearMeetingView() {
   resetSession();
   resetEngineStatus();
@@ -87,6 +118,9 @@ function clearMeetingView() {
   ui.getSummaryOutputElement().innerHTML = "";
   ui.setSummaryEmptyState(true);
   state.chatHistory = [];
+  stopTimerLoop();
+  state.meetingStartedAt = null;
+  ui.hideMeetingTimer();
 }
 
 async function onStart() {
@@ -131,7 +165,10 @@ async function onStart() {
   // going to start. Doing this earlier meant a denied permission prompt
   // would silently destroy the prior meeting's recoverable data for nothing.
   clearMeetingView();
-  startSessionClock(Date.now());
+  const startedAt = Date.now();
+  startSessionClock(startedAt);
+  state.meetingStartedAt = startedAt;
+  startTimerLoop();
   ui.setClearButtonEnabled(false);
 
   if (captureResult.warning) {
@@ -196,7 +233,23 @@ async function onStop() {
   state.transcriptionController = null;
 
   await stopRecording();
+
+  // The WebM duration fix (fixWebmDuration) already runs to completion inside
+  // stopRecording() itself before this line is reached, but teardownAudio()
+  // below still has real async work left (closing the AudioContext, stopping
+  // tracks) — surfacing "Processing audio…" here bridges that gap so Stop
+  // doesn't look like it's hung with no feedback.
+  ui.renderStatus("processing");
+
   await teardownAudio();
+
+  // One final precise render at the actual stop moment, then freeze — ticking
+  // is stopped but the last value stays on screen showing the meeting's total
+  // duration, rather than disappearing or resetting to zero.
+  if (state.meetingStartedAt != null) {
+    ui.renderMeetingTimer(Date.now() - state.meetingStartedAt);
+  }
+  stopTimerLoop();
 
   state.meetingState = "stopped";
   ui.renderMeetingControls("stopped");
@@ -221,6 +274,17 @@ function onClearMeeting() {
   ui.setPostMeetingControlsEnabled(false);
   ui.setClearButtonEnabled(false);
   ui.showToast("Cleared — ready for a new meeting.", "info");
+}
+
+/** Resets just the chat conversation — independent of the meeting/transcript,
+ *  so it doesn't touch export/summarize state at all. Cancels any reply that's
+ *  still streaming, since continuing to write into a bubble that's about to
+ *  be wiped from the DOM would be pointless (and its target node would be gone). */
+function onClearChat() {
+  state.aiAbortController?.abort();
+  state.chatHistory = [];
+  ui.clearChatView();
+  ui.showToast("Chat cleared.", "info");
 }
 
 function handleTranscriptionResult({ channel, text, isFinal }) {
@@ -289,6 +353,7 @@ function startRecording(stream) {
   state.mediaRecorder.ondataavailable = (e) => {
     if (e.data && e.data.size > 0) state.recordedChunks.push(e.data);
   };
+  state.recordingStartedAt = Date.now();
   state.mediaRecorder.start(1000);
 }
 
@@ -298,9 +363,19 @@ function stopRecording() {
       resolve();
       return;
     }
-    state.mediaRecorder.onstop = () => {
+    state.mediaRecorder.onstop = async () => {
       const type = state.mediaRecorder.mimeType || "audio/webm";
-      setAudioBlob(new Blob(state.recordedChunks, { type }));
+      const rawBlob = new Blob(state.recordedChunks, { type });
+      const durationMs = Date.now() - state.recordingStartedAt;
+
+      // Chrome's WebM output streams incrementally and can't know its own
+      // duration while being written — players report Infinity/missing
+      // duration and can't seek or change playback speed until this is
+      // patched in after the fact. Safari's MP4 output doesn't have this
+      // problem, so it's left untouched.
+      const finalBlob = type.includes("webm") ? await fixWebmDuration(rawBlob, durationMs) : rawBlob;
+
+      setAudioBlob(finalBlob);
       resolve();
     };
     try {
@@ -538,7 +613,7 @@ async function onChatSubmit(userMessage) {
   }
 
   ui.appendChatUserMessage(userMessage);
-  state.chatHistory.push({ role: "user", text: userMessage });
+  pushChatHistory({ role: "user", text: userMessage });
 
   const bubble = ui.createChatAssistantBubble();
   const renderer = ui.createThrottledStreamRenderer(bubble);
@@ -548,13 +623,13 @@ async function onChatSubmit(userMessage) {
   ui.setChatFormBusy(true);
 
   try {
-    // Only the most recent turns go to the model as context — the full
-    // conversation still stays visible on screen either way — so a very
-    // long chat session can't eventually exceed a model's context window.
-    const recentHistory = state.chatHistory.slice(-MAX_CHAT_HISTORY_TURNS - 1, -1);
+    // state.chatHistory is already capped to MAX_CHAT_HISTORY total, so this
+    // is just "everything except the message we just pushed above" — already
+    // bounded, no further slicing math needed here.
+    const priorHistory = state.chatHistory.slice(0, -1);
     for await (const delta of chatWithTranscriptStream({
       transcriptText: buildTranscriptText(),
-      chatHistory: recentHistory,
+      chatHistory: priorHistory,
       userMessage,
       settings: state.settings,
       modelList: state.modelList,
@@ -564,7 +639,7 @@ async function onChatSubmit(userMessage) {
       renderer.push(delta);
     }
     renderer.flushNow();
-    state.chatHistory.push({ role: "assistant", text: renderer.getText() });
+    pushChatHistory({ role: "assistant", text: renderer.getText() });
     ui.setFallbackBanner(null);
   } catch (err) {
     if (err.name === "AbortError") {
@@ -606,6 +681,13 @@ function restorePersistedSession() {
     ui.getSummaryOutputElement().innerHTML = ui.renderMarkdownSafe(restored.summaryText);
   }
 
+  // Show a frozen duration based on the last recovered utterance, matching
+  // how a normally-ended meeting freezes its timer at the stop moment.
+  if (restored.meetingStartedAt != null && restored.transcriptEntries.length > 0) {
+    const lastEntry = restored.transcriptEntries[restored.transcriptEntries.length - 1];
+    ui.renderMeetingTimer(lastEntry.timestamp - restored.meetingStartedAt);
+  }
+
   state.meetingState = "stopped";
   ui.renderMeetingControls("stopped");
   ui.renderStatus("stopped", "Restored session");
@@ -643,6 +725,7 @@ function init() {
     onClearStoredData,
     onClearApiKeys,
     onClearMeeting,
+    onClearChat,
     onExportMarkdown,
     onExportPlainText,
     onDownloadAudio,
@@ -661,6 +744,7 @@ function init() {
   ui.setSummaryEmptyState(true);
   ui.switchSidePanel("summary");
   ui.populateModelSelect([], "");
+  ui.hideMeetingTimer();
   resetEngineStatus();
   ui.renderEngineStatus(getEngineStatus());
 
