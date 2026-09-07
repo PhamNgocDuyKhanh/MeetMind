@@ -23,6 +23,7 @@ function cacheElements() {
     "status-pill",
     "status-dot",
     "status-text",
+    "meeting-timer",
     "fallback-banner",
     "btn-start",
     "btn-pause",
@@ -70,6 +71,7 @@ function cacheElements() {
     "chat-empty-state",
     "chat-form",
     "chat-input",
+    "btn-clear-chat",
     "toast-container",
     "unsupported-banner",
     "engine-status-dot",
@@ -174,6 +176,7 @@ const STATUS_STYLES = {
   listening: { text: "Listening", dotModifier: "listening" },
   paused: { text: "Paused", dotModifier: "paused" },
   stopping: { text: "Stopping…", dotModifier: "stopping" },
+  processing: { text: "Processing audio…", dotModifier: "stopping" },
   stopped: { text: "Meeting ended", dotModifier: "stopped" },
   error: { text: "Error", dotModifier: "error" },
 };
@@ -182,6 +185,28 @@ export function renderStatus(stateKey, customText) {
   const style = STATUS_STYLES[stateKey] || STATUS_STYLES.idle;
   els.statusText.textContent = customText || style.text;
   els.statusDot.className = `status-dot status-dot--${style.dotModifier}`;
+}
+
+/** Formats milliseconds as "MM:SS", switching to "H:MM:SS" once it crosses an hour. */
+function formatDuration(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+/** Shows the meeting timer with the given elapsed time (wall-clock ms since the meeting started). */
+export function renderMeetingTimer(elapsedMs) {
+  els.meetingTimer.textContent = formatDuration(elapsedMs);
+  els.meetingTimer.classList.remove("hidden");
+}
+
+/** Hides the timer and resets its label — call this when there's no active/ended meeting to show. */
+export function hideMeetingTimer() {
+  els.meetingTimer.classList.add("hidden");
+  els.meetingTimer.textContent = "00:00";
 }
 
 /** Shows/hides/disables the Start/Pause/Resume/Stop buttons for a given lifecycle state. */
@@ -678,6 +703,7 @@ export function bindControls(handlers) {
     els.chatInput.value = "";
     handlers.onChatSubmit(text);
   });
+  els.btnClearChat.addEventListener("click", handlers.onClearChat);
 
   window.addEventListener("beforeunload", handlers.onBeforeUnload);
 }
