@@ -345,14 +345,24 @@ async function* streamGeminiCompletion({ apiKey, model, contents, generationConf
 }
 
 function geminiContentsToOpenAiMessages(contents) {
-  // The first "user" turn in our Gemini-shaped contents array is actually the
-  // system instructions (transcript + task) — translate it to a real `system`
-  // message for the OpenAI-style Groq path instead of disguising it as a user
-  // turn, which is both more idiomatic and follows instructions more reliably.
-  return contents.map((c, i) => ({
-    role: i === 0 ? "system" : c.role === "model" ? "assistant" : c.role === "system" ? "system" : "user",
-    content: (c.parts || []).map((p) => p.text || "").join(""),
-  }));
+  // Only the first turn of a genuine multi-turn conversation (chat: preamble
+  // instructions, then a canned ack, then real dialogue) is actually "system
+  // instructions" that should become a system message. For a single-message
+  // request (summarize has exactly one message — the whole request), that
+  // message IS the user's ask and must stay role "user", or OpenAI-compatible
+  // APIs like Groq reject the request outright with "Last message role must
+  // be 'user'" since there'd be no user turn at all to respond to.
+  return contents.map((c, i) => {
+    const isConversationPreamble = i === 0 && contents.length > 1;
+    const role = isConversationPreamble
+      ? "system"
+      : c.role === "model"
+      ? "assistant"
+      : c.role === "system"
+      ? "system"
+      : "user";
+    return { role, content: (c.parts || []).map((p) => p.text || "").join("") };
+  });
 }
 
 async function* streamGroqCompletion({ apiKey, model, contents, signal }) {
@@ -529,16 +539,6 @@ export async function* summarizeTranscriptStream({ transcriptText, settings, mod
 
 /** Streams a chat reply grounded in the meeting transcript, given prior chat turns and a new user message. */
 export async function* chatWithTranscriptStream({ transcriptText, chatHistory = [], userMessage, settings, modelList, onFallback, signal }) {
-  // 1. Lọc bỏ các phần tử lỗi hoặc ép lịch sử chat luôn đan xen chuẩn xác
-  const sanitizedHistory = [];
-  let expectedRole = "user"; // Theo chuẩn đa lượt, sau system/model định hình thì tới user
-
-  // Lọc sạch lịch sử chat để không bị dồn 2 role giống nhau liên tiếp
-  for (const m of chatHistory) {
-    const role = m.role === "assistant" ? "model" : "user";
-    sanitizedHistory.push({ role, parts: [{ text: m.text }] });
-  }
-
   const contents = [
     {
       role: "user",
@@ -556,10 +556,8 @@ export async function* chatWithTranscriptStream({ transcriptText, chatHistory = 
       role: "model",
       parts: [{ text: "Understood — I have the transcript as context and I'm ready to answer questions about this meeting." }],
     },
-    ...sanitizedHistory,
-    // 2. Bắt buộc gắn tin nhắn mới nhất của user vào cuối cùng để bảo đảm luôn kết thúc bằng user
+    ...chatHistory.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.text }] })),
     { role: "user", parts: [{ text: userMessage }] },
   ];
-
   yield* generateContentStream({ contents, settings, modelList, onFallback, signal });
 }
