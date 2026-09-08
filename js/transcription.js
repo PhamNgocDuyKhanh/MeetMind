@@ -71,6 +71,7 @@ export class TranscriptionChannel {
     this._paused = false;
     this._restartCount = 0;
     this._hasHeardAnything = false; // true once any result (interim or final) has ever arrived
+    this._errorReportedSinceLastStart = false; // caps onError to once per problem streak — see onerror/catch below
     this._restartTimer = null;
     this._Ctor = Ctor;
     this._currentInterimText = "";
@@ -99,6 +100,7 @@ export class TranscriptionChannel {
   resume() {
     this._paused = false;
     this._restartCount = 0; // clean baseline — restarts during the pause never counted anyway (see onend)
+    this._errorReportedSinceLastStart = false;
   }
 
   start() {
@@ -106,10 +108,35 @@ export class TranscriptionChannel {
     this._paused = false;
     this._restartCount = 0;
     this._hasHeardAnything = false;
+    this._errorReportedSinceLastStart = false;
     this._createAndStart();
   }
 
+  /** Detaches the previous recognition instance's listeners and force-stops it,
+   *  before a new one is created. Chrome in particular can throw InvalidStateError
+   *  if a new instance's start() is called before the browser has fully released
+   *  the previous instance's underlying native speech-recognition resource — this
+   *  gives it an explicit signal to let go, rather than just hoping the timing
+   *  works out. Detaching listeners first also means a stray late event from the
+   *  old instance can never affect this channel's state after it's been replaced. */
+  _teardownCurrentRecognition() {
+    if (!this._recognition) return;
+    const rec = this._recognition;
+    rec.onresult = null;
+    rec.onerror = null;
+    rec.onend = null;
+    rec.onstart = null;
+    try {
+      rec.abort();
+    } catch (_) {
+      /* already stopped/aborted — nothing to clean up */
+    }
+    this._recognition = null;
+  }
+
   _createAndStart() {
+    this._teardownCurrentRecognition();
+
     const recognition = new this._Ctor();
     recognition.continuous = true;
     recognition.interimResults = true;
@@ -125,6 +152,7 @@ export class TranscriptionChannel {
         const transcriptPiece = result[0].transcript;
         if (result.isFinal) {
           this._restartCount = 0; // healthy stream resets backoff
+          this._errorReportedSinceLastStart = false; // confirmed healthy — a future problem can be reported again
           this.callbacks.onResult({
             channel: this.channelId,
             text: transcriptPiece.trim(),
@@ -149,8 +177,13 @@ export class TranscriptionChannel {
     recognition.onerror = (event) => {
       const code = mapRecognitionErrorCode(event.error);
       // "no-speech" is routine (the user paused) — do not surface as a hard error,
-      // just let onend's auto-restart logic take over.
-      if (code !== "no-speech") {
+      // just let onend's auto-restart logic take over. Beyond that, cap real
+      // errors to ONE toast per problem streak (reset on the next successful
+      // start/result) rather than one per retry attempt — with unbounded
+      // pre-speech retries, an error that keeps recurring every attempt would
+      // otherwise flood the UI exactly as often as it retries.
+      if (code !== "no-speech" && !this._errorReportedSinceLastStart) {
+        this._errorReportedSinceLastStart = true;
         this.callbacks.onError({
           channel: this.channelId,
           error: new TranscriptionError(describeRecognitionError(event.error), code, event),
@@ -211,6 +244,7 @@ export class TranscriptionChannel {
     };
 
     recognition.onstart = () => {
+      this._errorReportedSinceLastStart = false; // this instance is confirmed running — clear slate for any future problem
       this.callbacks.onStatusChange({ channel: this.channelId, status: "listening" });
     };
 
@@ -219,15 +253,25 @@ export class TranscriptionChannel {
     try {
       recognition.start();
     } catch (err) {
-      // start() throws synchronously if called while already running (a real,
-      // documented Chrome quirk from rapid state transitions). Unlike onerror/
-      // onend, onend never fires for a synchronous throw — so without an
-      // explicit retry here, this channel would go permanently silent after
-      // one transient failure with no auto-recovery at all.
-      this.callbacks.onError({
-        channel: this.channelId,
-        error: new TranscriptionError("Could not start speech recognition.", "unknown", err),
-      });
+      // InvalidStateError here is the well-known Chrome race described above
+      // _teardownCurrentRecognition() — inherently transient and expected to
+      // clear up on its own, so it's logged for developers but never shown to
+      // the user, and never counts against any retry budget. Anything else is
+      // a genuinely unexpected failure worth surfacing — but still only once
+      // per problem streak (see _errorReportedSinceLastStart), since with
+      // unbounded pre-speech retries, surfacing it on every single attempt
+      // would flood the UI exactly as fast as it retries.
+      const isKnownTransientRace = err && err.name === "InvalidStateError";
+      if (isKnownTransientRace) {
+        console.warn(`[transcription:${this.channelId}] start() hit the known InvalidStateError race — retrying quietly.`, err);
+      } else if (!this._errorReportedSinceLastStart) {
+        this._errorReportedSinceLastStart = true;
+        this.callbacks.onError({
+          channel: this.channelId,
+          error: new TranscriptionError("Could not start speech recognition.", "unknown", err),
+        });
+      }
+
       if (this._userStopped) return;
 
       if (!this._hasHeardAnything) {
