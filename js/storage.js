@@ -53,6 +53,8 @@ export function hasAnyAiKey(settings) {
 export function clearApiKeys() {
   const current = loadSettings();
   current.geminiKeyPrimary = "";
+  current.geminiKeySecondary = "";
+  current.groqKey = "";
   saveSettings(current);
   return current;
 }
