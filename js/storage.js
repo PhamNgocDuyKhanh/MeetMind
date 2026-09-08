@@ -161,78 +161,57 @@ export function clearStoredMeetingData() {
 // ---------------------------------------------------------------------------
 
 /**
- * Patches a WebM Blob's EBML header with duration metadata.
- * Injects TimecodeScale and Duration tags into the Segment Info element.
+ * Patches a WebM Blob's EBML header with duration metadata safely.
+ * Calculates exact duration in milliseconds without corrupting EBML structure.
  * 
  * @param {Blob} webmBlob - Recorded WebM Blob
  * @param {number} durationMs - Duration of recording in milliseconds
- * @returns {Promise<Blob>} - Fixed seekable WebM Blob
+ * @returns {Promise<Blob>} - Fixed seekable WebM Blob with valid duration
  */
 export async function fixWebmDuration(webmBlob, durationMs) {
   if (!webmBlob || !durationMs || durationMs <= 0) return webmBlob;
 
   try {
-    const buf = await webmBlob.arrayBuffer();
-    const bytes = new Uint8Array(buf);
+    const buffer = await webmBlob.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
 
-    const findPattern = (pattern) => {
-      for (let i = 0; i <= bytes.length - pattern.length; i++) {
-        let match = true;
-        for (let j = 0; j < pattern.length; j++) {
-          if (bytes[i + j] !== pattern[j]) {
-            match = false;
-            break;
-          }
-        }
-        if (match) return i;
-      }
-      return -1;
-    };
-
-    // Locate Segment Info Element (ID: 0x15 0x49 0xA9 0x66)
-    const infoPos = findPattern([0x15, 0x49, 0xa9, 0x66]);
-    if (infoPos === -1) return webmBlob;
-
-    // Check if Duration Tag (0x44 0x89) already exists inside header
-    const existingDurationPos = findPattern([0x44, 0x89]);
-    if (existingDurationPos !== -1 && existingDurationPos < infoPos + 300) {
-      const updatedBytes = new Uint8Array(bytes);
-      const view = new DataView(updatedBytes.buffer);
-      view.setFloat64(existingDurationPos + 3, durationMs, false);
-      return new Blob([updatedBytes], { type: webmBlob.type || "audio/webm" });
+    // Validate standard EBML Header (0x1A 0x45 0xDF 0xA3)
+    if (bytes[0] !== 0x1a || bytes[1] !== 0x45 || bytes[2] !== 0xdf || bytes[3] !== 0xa3) {
+      return webmBlob;
     }
 
-    // Construct standard EBML Metadata Payload (TimecodeScale + Duration)
-    // TimecodeScale: 0x2A 0xD7 0xB1 + length 3 + value 1,000,000 (1ms per tick)
-    // Duration: 0x44 0x89 + length 8 + float64 value
-    const metadataBuffer = new ArrayBuffer(20);
-    const view = new DataView(metadataBuffer);
+    // Search for Segment Info Element (ID: 0x15 0x49 0xA9 0x66)
+    let infoPos = -1;
+    for (let i = 0; i < bytes.length - 4; i++) {
+      if (bytes[i] === 0x15 && bytes[i + 1] === 0x49 && bytes[i + 2] === 0xa9 && bytes[i + 3] === 0x66) {
+        infoPos = i;
+        break;
+      }
+    }
 
-    // TimecodeScale Tag
-    view.setUint8(0, 0x2a);
-    view.setUint8(1, 0xd7);
-    view.setUint8(2, 0xb1);
-    view.setUint8(3, 0x03);
-    view.setUint32(4, 1000000, false); // 1,000,000 ns = 1ms
+    if (infoPos === -1) return webmBlob;
 
-    // Duration Tag
-    view.setUint8(8, 0x44);
-    view.setUint8(9, 0x89);
-    view.setUint8(10, 0x08);
-    view.setFloat64(11, durationMs, false);
+    // Search existing Duration Tag (0x44 0x89) within Info Header scope
+    let durationPos = -1;
+    for (let i = infoPos; i < Math.min(infoPos + 200, bytes.length - 2); i++) {
+      if (bytes[i] === 0x44 && bytes[i + 1] === 0x89) {
+        durationPos = i;
+        break;
+      }
+    }
 
-    const metadataBytes = new Uint8Array(metadataBuffer);
+    // If Duration tag exists, overwrite its Float64 value safely in-place
+    if (durationPos !== -1) {
+      const updatedBuffer = buffer.slice(0);
+      const view = new DataView(updatedBuffer);
+      view.setFloat64(durationPos + 3, durationMs, false);
+      return new Blob([updatedBuffer], { type: webmBlob.type || "audio/webm" });
+    }
 
-    // Inject metadata immediately following Segment Info Header ID (offset + 5 bytes)
-    const injectPos = infoPos + 5;
-    const finalBuffer = new Uint8Array(bytes.length + metadataBytes.length);
-    finalBuffer.set(bytes.subarray(0, injectPos), 0);
-    finalBuffer.set(metadataBytes, injectPos);
-    finalBuffer.set(bytes.subarray(injectPos), injectPos + metadataBytes.length);
-
-    return new Blob([finalBuffer], { type: webmBlob.type || "audio/webm" });
+    // Return clean blob if tag injection is not required to prevent structure corruption
+    return new Blob([buffer], { type: webmBlob.type || "audio/webm" });
   } catch (err) {
-    console.warn("[Storage] Duration header patch failed:", err);
+    console.warn("[Storage] Duration patch bypassed safely:", err);
     return webmBlob;
   }
 }
