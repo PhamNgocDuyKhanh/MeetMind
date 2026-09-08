@@ -363,21 +363,37 @@ function stopRecording() {
       resolve();
       return;
     }
+
+    // Force MediaRecorder to flush any remaining buffered data into recordedChunks
+    try {
+      if (state.mediaRecorder.state === "recording") {
+        state.mediaRecorder.requestData();
+      }
+    } catch (err) {
+      console.warn("requestData failed:", err);
+    }
+
     state.mediaRecorder.onstop = async () => {
+      // Short delay to ensure all pending 'ondataavailable' events finish pushing to recordedChunks
+      await new Promise((r) => setTimeout(r, 50));
+
       const type = state.mediaRecorder.mimeType || "audio/webm";
       const rawBlob = new Blob(state.recordedChunks, { type });
       const durationMs = Date.now() - state.recordingStartedAt;
 
-      // Chrome's WebM output streams incrementally and can't know its own
-      // duration while being written — players report Infinity/missing
-      // duration and can't seek or change playback speed until this is
-      // patched in after the fact. Safari's MP4 output doesn't have this
-      // problem, so it's left untouched.
-      const finalBlob = type.includes("webm") ? await fixWebmDuration(rawBlob, durationMs) : rawBlob;
+      let finalBlob = rawBlob;
+      if (type.includes("webm") && durationMs > 0) {
+        try {
+          finalBlob = await fixWebmDuration(rawBlob, durationMs);
+        } catch (err) {
+          console.error("Error in fixWebmDuration:", err);
+        }
+      }
 
       setAudioBlob(finalBlob);
       resolve();
     };
+
     try {
       state.mediaRecorder.stop();
     } catch (err) {
