@@ -129,7 +129,7 @@ function persistSession() {
 
 export function loadPersistedSession() {
   try {
-    const raw = localStorage.setItem ? localStorage.getItem(STORAGE_KEYS.SESSION) : null;
+    const raw = localStorage.getItem(STORAGE_KEYS.SESSION);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed.transcriptEntries || parsed.transcriptEntries.length === 0) return null;
@@ -162,7 +162,7 @@ export function clearStoredMeetingData() {
 
 /**
  * Patches a WebM Blob's EBML header with duration metadata.
- * Kept identical function signature to maintain 1:1 compatibility with main.js.
+ * Injects TimecodeScale and Duration tags into the Segment Info element.
  * 
  * @param {Blob} webmBlob - Recorded WebM Blob
  * @param {number} durationMs - Duration of recording in milliseconds
@@ -172,44 +172,67 @@ export async function fixWebmDuration(webmBlob, durationMs) {
   if (!webmBlob || !durationMs || durationMs <= 0) return webmBlob;
 
   try {
-    const arrayBuffer = await webmBlob.arrayBuffer();
-    const dataView = new DataView(arrayBuffer);
+    const buf = await webmBlob.arrayBuffer();
+    const bytes = new Uint8Array(buf);
 
-    // Search for Segment Info element (ID: 0x1549A966)
-    let infoOffset = -1;
-    for (let i = 0; i < dataView.byteLength - 4; i++) {
-      if (
-        dataView.getUint8(i) === 0x15 &&
-        dataView.getUint8(i + 1) === 0x49 &&
-        dataView.getUint8(i + 2) === 0xa9 &&
-        dataView.getUint8(i + 3) === 0x66
-      ) {
-        infoOffset = i;
-        break;
+    const findPattern = (pattern) => {
+      for (let i = 0; i <= bytes.length - pattern.length; i++) {
+        let match = true;
+        for (let j = 0; j < pattern.length; j++) {
+          if (bytes[i + j] !== pattern[j]) {
+            match = false;
+            break;
+          }
+        }
+        if (match) return i;
       }
+      return -1;
+    };
+
+    // Locate Segment Info Element (ID: 0x15 0x49 0xA9 0x66)
+    const infoPos = findPattern([0x15, 0x49, 0xa9, 0x66]);
+    if (infoPos === -1) return webmBlob;
+
+    // Check if Duration Tag (0x44 0x89) already exists inside header
+    const existingDurationPos = findPattern([0x44, 0x89]);
+    if (existingDurationPos !== -1 && existingDurationPos < infoPos + 300) {
+      const updatedBytes = new Uint8Array(bytes);
+      const view = new DataView(updatedBytes.buffer);
+      view.setFloat64(existingDurationPos + 3, durationMs, false);
+      return new Blob([updatedBytes], { type: webmBlob.type || "audio/webm" });
     }
 
-    if (infoOffset === -1) return webmBlob;
+    // Construct standard EBML Metadata Payload (TimecodeScale + Duration)
+    // TimecodeScale: 0x2A 0xD7 0xB1 + length 3 + value 1,000,000 (1ms per tick)
+    // Duration: 0x44 0x89 + length 8 + float64 value
+    const metadataBuffer = new ArrayBuffer(20);
+    const view = new DataView(metadataBuffer);
 
-    // Search for Duration tag (ID: 0x4489)
-    let durationOffset = -1;
-    for (let i = infoOffset; i < Math.min(infoOffset + 100, dataView.byteLength - 2); i++) {
-      if (dataView.getUint8(i) === 0x44 && dataView.getUint8(i + 1) === 0x89) {
-        durationOffset = i;
-        break;
-      }
-    }
+    // TimecodeScale Tag
+    view.setUint8(0, 0x2a);
+    view.setUint8(1, 0xd7);
+    view.setUint8(2, 0xb1);
+    view.setUint8(3, 0x03);
+    view.setUint32(4, 1000000, false); // 1,000,000 ns = 1ms
 
-    if (durationOffset !== -1) {
-      const updatedBuffer = arrayBuffer.slice(0);
-      const updatedView = new DataView(updatedBuffer);
-      updatedView.setFloat64(durationOffset + 3, durationMs, false);
-      return new Blob([updatedBuffer], { type: webmBlob.type || "audio/webm" });
-    }
+    // Duration Tag
+    view.setUint8(8, 0x44);
+    view.setUint8(9, 0x89);
+    view.setUint8(10, 0x08);
+    view.setFloat64(11, durationMs, false);
 
-    return webmBlob;
+    const metadataBytes = new Uint8Array(metadataBuffer);
+
+    // Inject metadata immediately following Segment Info Header ID (offset + 5 bytes)
+    const injectPos = infoPos + 5;
+    const finalBuffer = new Uint8Array(bytes.length + metadataBytes.length);
+    finalBuffer.set(bytes.subarray(0, injectPos), 0);
+    finalBuffer.set(metadataBytes, injectPos);
+    finalBuffer.set(bytes.subarray(injectPos), injectPos + metadataBytes.length);
+
+    return new Blob([finalBuffer], { type: webmBlob.type || "audio/webm" });
   } catch (err) {
-    console.warn("[Storage] Duration header patch skipped:", err);
+    console.warn("[Storage] Duration header patch failed:", err);
     return webmBlob;
   }
 }
@@ -265,7 +288,7 @@ export function downloadAudioRecording(filenameBase) {
 }
 
 function triggerBlobDownload(blob, filename) {
-  const url = URL.URL ? URL.createObjectURL(blob) : window.URL.createObjectURL(blob);
+  const url = (window.URL || window.webkitURL).createObjectURL(blob);
   const a = document.createElement("a");
   a.style.display = "none";
   a.href = url;
@@ -274,6 +297,6 @@ function triggerBlobDownload(blob, filename) {
   a.click();
   setTimeout(() => {
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    (window.URL || window.webkitURL).revokeObjectURL(url);
   }, 100);
 }
