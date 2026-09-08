@@ -161,8 +161,7 @@ export function clearStoredMeetingData() {
 // ---------------------------------------------------------------------------
 
 /**
- * Patches a WebM Blob's EBML header with duration metadata safely.
- * Calculates exact duration in milliseconds without corrupting EBML structure.
+ * Patches a WebM Blob's EBML header with duration metadata using window.ysFixWebmDuration.
  * 
  * @param {Blob} webmBlob - Recorded WebM Blob
  * @param {number} durationMs - Duration of recording in milliseconds
@@ -172,48 +171,17 @@ export async function fixWebmDuration(webmBlob, durationMs) {
   if (!webmBlob || !durationMs || durationMs <= 0) return webmBlob;
 
   try {
-    const buffer = await webmBlob.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-
-    // Validate standard EBML Header (0x1A 0x45 0xDF 0xA3)
-    if (bytes[0] !== 0x1a || bytes[1] !== 0x45 || bytes[2] !== 0xdf || bytes[3] !== 0xa3) {
-      return webmBlob;
+    // If external helper library loaded via CDN exists, use standard parser
+    const fixFn = window.ysFixWebmDuration || window.fixWebmDuration;
+    if (typeof fixFn === "function") {
+      const fixedBlob = await fixFn(webmBlob, durationMs);
+      return fixedBlob;
     }
-
-    // Search for Segment Info Element (ID: 0x15 0x49 0xA9 0x66)
-    let infoPos = -1;
-    for (let i = 0; i < bytes.length - 4; i++) {
-      if (bytes[i] === 0x15 && bytes[i + 1] === 0x49 && bytes[i + 2] === 0xa9 && bytes[i + 3] === 0x66) {
-        infoPos = i;
-        break;
-      }
-    }
-
-    if (infoPos === -1) return webmBlob;
-
-    // Search existing Duration Tag (0x44 0x89) within Info Header scope
-    let durationPos = -1;
-    for (let i = infoPos; i < Math.min(infoPos + 200, bytes.length - 2); i++) {
-      if (bytes[i] === 0x44 && bytes[i + 1] === 0x89) {
-        durationPos = i;
-        break;
-      }
-    }
-
-    // If Duration tag exists, overwrite its Float64 value safely in-place
-    if (durationPos !== -1) {
-      const updatedBuffer = buffer.slice(0);
-      const view = new DataView(updatedBuffer);
-      view.setFloat64(durationPos + 3, durationMs, false);
-      return new Blob([updatedBuffer], { type: webmBlob.type || "audio/webm" });
-    }
-
-    // Return clean blob if tag injection is not required to prevent structure corruption
-    return new Blob([buffer], { type: webmBlob.type || "audio/webm" });
   } catch (err) {
-    console.warn("[Storage] Duration patch bypassed safely:", err);
-    return webmBlob;
+    console.warn("[Storage] External fixWebmDuration failed, falling back to clean blob:", err);
   }
+
+  return webmBlob;
 }
 
 // ---------------------------------------------------------------------------
