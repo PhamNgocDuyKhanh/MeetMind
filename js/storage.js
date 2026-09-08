@@ -162,23 +162,26 @@ export function clearStoredMeetingData() {
 
 /**
  * Patches a WebM Blob's EBML header with duration metadata using window.ysFixWebmDuration.
+ * Converts callback-style ysFixWebmDuration into a Promise.
  * 
  * @param {Blob} webmBlob - Recorded WebM Blob
  * @param {number} durationMs - Duration of recording in milliseconds
- * @returns {Promise<Blob>} - Fixed seekable WebM Blob with valid duration
+ * @returns {Promise<Blob>} - Fixed seekable WebM Blob
  */
 export async function fixWebmDuration(webmBlob, durationMs) {
   if (!webmBlob || !durationMs || durationMs <= 0) return webmBlob;
 
   try {
-    // If external helper library loaded via CDN exists, use standard parser
     const fixFn = window.ysFixWebmDuration || window.fixWebmDuration;
     if (typeof fixFn === "function") {
-      const fixedBlob = await fixFn(webmBlob, durationMs);
-      return fixedBlob;
+      return new Promise((resolve) => {
+        fixFn(webmBlob, durationMs, (fixedBlob) => {
+          resolve(fixedBlob || webmBlob);
+        });
+      });
     }
   } catch (err) {
-    console.warn("[Storage] External fixWebmDuration failed, falling back to clean blob:", err);
+    console.warn("[Storage] Duration header patch failed:", err);
   }
 
   return webmBlob;
