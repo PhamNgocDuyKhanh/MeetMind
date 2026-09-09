@@ -20,14 +20,29 @@ Bring your own Gemini and/or Groq API key. Nothing you say, type, or paste ever 
 
 ## Key Features
 
+**Transcription & meeting flow**
 - **Live transcription** via the browser's native Web Speech API — no audio ever leaves your machine for transcription itself.
 - **Dual audio channels**: your microphone ("Me") and, optionally, the meeting/system audio ("Others") — see [Setup & Configuration](#system-audio-loopback-capturing-remote-participants) for the caveats around the second channel.
+- **Elapsed-time timer** next to the status indicator — runs on wall-clock time from the moment a meeting starts (kept deliberately in sync with the exported transcript's own elapsed timestamps), freezes at the final duration on Stop.
+- **Resizable layout** — drag the divider between the transcript and the sidebar to resize either side, same idea as Claude's own resizable side panel. Remembered across sessions.
+- **Explicit "Clear"** action to wipe the screen and start fresh between meetings without reloading the page.
+
+**AI summaries & chat**
 - **AI summaries & chat**, grounded in the live transcript, powered by **Gemini** with **Groq** as an automatic fallback.
 - **Intelligent failover chain** on rate limits or errors: same key with a lighter model → secondary Gemini key → Groq — with no artificial retry delay.
 - **Engine Status panel**: live view of which model answered, latency, and how many times the app has had to fall back.
+- **Predefined quick-prompt chips** in the Chat panel (follow-up questions, list interview questions, evaluate a candidate, etc.) — content lives in its own small data file, so adding one is a one-line change (see [Architectural Overview](#architectural-overview)).
+- **Per-message copy buttons** on every chat bubble.
+- **Capped chat history** sent to the AI (most recent ~10 messages) so a long back-and-forth can't blow past a model's context window — the full conversation still stays visible on screen either way.
+- **Clear chat** control, independent of clearing the meeting itself.
+
+**Data, exports & privacy**
 - **Reload-safe**: your transcript and any generated summary are recovered automatically if the tab reloads or crashes mid-meeting (recorded audio itself is not recoverable this way).
 - **Professional exports**: `.md` / `.txt` with a metadata header, `[HH:MM:SS]` elapsed timestamps per line, and clear speaker labels.
-- **Local audio recording** with one-click download.
+- **Local audio recording** with one-click download — the downloaded WebM file has its duration metadata patched in-browser (no external library) specifically so it can be seeked and played back at different speeds, which raw `MediaRecorder` output can't do out of the box.
+- **Separate "Clear saved API keys" and "Clear transcript recovery data"** controls in Settings, so you can wipe one without touching the other.
+
+**Everything else**
 - **Light / dark theme**, matching your OS by default, togglable and remembered.
 - **No backend, no database, no build pipeline** — plain HTML/CSS/JS, deployable as static files.
 
@@ -55,17 +70,28 @@ js/ai.js                All communication with Gemini and Groq: dynamic model
 
 js/storage.js           Owns all persisted/exportable data: settings
                         (localStorage), the in-memory meeting session
-                        (transcript, summary, recorded audio blob), and the
-                        .md/.txt export file generation. No DOM access.
+                        (transcript, summary, recorded audio blob), the
+                        .md/.txt export file generation, and the WebM
+                        duration-metadata patch applied before a recording
+                        is handed off for download. No DOM access.
+
+js/chatPrompts.js       Predefined quick-prompt presets shown as chips in the
+                        Chat panel — a plain data array and nothing else.
+                        Kept separate specifically so adding, editing, or
+                        reordering a preset never requires touching rendering
+                        (ui.js) or orchestration (main.js) logic.
 
 js/audioMixer.js        Web Audio API layer: merges mic + tab/system audio for
-                        level metering and local recording. Provided as-is —
-                        treat its internal logic as stable/"don't touch" unless
-                        you're intentionally revisiting the audio pipeline.
+                        level metering and local recording. Originally
+                        provided as a finished module — treat its internal
+                        logic as stable/"don't touch" unless you're
+                        intentionally revisiting the audio pipeline.
 
 js/transcription.js     Wraps the native SpeechRecognition API as two
                         independent channels ("mic" and "system"). Also
-                        provided as-is — see its header comment for an honest
+                        originally provided as a finished module, with one
+                        narrow, deliberate fix applied since (see Maintenance
+                        Notes below) — see its header comment for an honest
                         explanation of what the Web Speech API can and can't do.
 
 assets/                 Static assets (favicon, future icons/images).
@@ -75,7 +101,7 @@ assets/                 Static assets (favicon, future icons/images).
 
 ```
 main.js  →  ui.js, ai.js, storage.js, audioMixer.js, transcription.js
-ui.js    →  (nothing else — pure DOM, no imports from other app modules)
+ui.js    →  chatPrompts.js (data only — no logic flows back the other way)
 ai.js    →  (nothing else — pure fetch/streaming logic)
 storage.js → (nothing else — pure data/localStorage logic)
 ```
@@ -87,6 +113,7 @@ If you're adding a feature and aren't sure where it belongs, this table should s
 | Change the AI failover order, add a provider, adjust prompts | `js/ai.js` |
 | Change what gets exported, or the export file format | `js/storage.js` |
 | Change what's persisted across a reload | `js/storage.js` |
+| Add/edit a quick-prompt chip in the Chat panel | `js/chatPrompts.js` |
 | Add/change a DOM element, button, or visual state | `js/ui.js` + `index.html` |
 | Change the sequence of a meeting (start/stop/summarize logic) | `js/main.js` |
 | Change colors, spacing, typography, dark mode | `css/style.css` |
@@ -107,8 +134,8 @@ If you're adding a feature and aren't sure where it belongs, this table should s
 1. Open the app and click the gear icon (Settings).
 2. Paste your primary Gemini key, click **Refresh** to pull the live model list, and pick a model (or type one manually if the fetch fails).
 3. Optionally add a secondary Gemini key and/or a Groq key + fallback model.
-4. Pick your speaking language ("Your language").
-5. Save. Everything is stored in this browser's `localStorage` only — see the in-app privacy notice for exactly what's stored and why.
+4. Pick your speaking language ("Your language") — includes English (US/UK), Spanish, French, German, Portuguese (BR), Hindi, Japanese, Chinese (Simplified), and Vietnamese.
+5. Save. Everything is stored in this browser's `localStorage` only — see the in-app privacy notice for exactly what's stored and why, and use the "Clear saved API keys" / "Clear transcript recovery data" buttons in Settings if you want to wipe either independently.
 
 ### Running locally (before deploying)
 
@@ -172,11 +199,12 @@ A few things worth knowing before making changes, so behavior doesn't quietly re
 
 - **Keep the module boundaries strict.** `ui.js` should never read `localStorage` or call `fetch`; `storage.js` and `ai.js` should never touch `document`. This is what makes the codebase easy to reason about — if a change starts crossing these lines, it's usually a sign the change belongs in a different file.
 - **No build tooling, on purpose.** The lack of bundler/transpiler is a deliberate choice for GitHub Pages simplicity and long-term maintainability by anyone who opens the repo cold. Think carefully before introducing one.
-- **`js/audioMixer.js` and `js/transcription.js`** were written to be accepted "as-is" and contain their own detailed header comments explaining real browser limitations (see the system-audio note above). Avoid changing their internal logic without re-reading those comments first.
+- **`js/audioMixer.js` and `js/transcription.js`** were originally provided as finished modules and contain their own detailed header comments explaining real browser limitations (see the system-audio note above). `audioMixer.js` remains untouched. `transcription.js` has since had one narrow, deliberate fix applied on top: a channel that hasn't yet heard *any* speech gets a much larger auto-restart budget than one that has, because real meetings routinely open with silence that used to exhaust the strict retry budget before a single word was ever transcribed. Everything else about its design is unchanged. Treat further changes to either file with the same caution as before: read the existing comments fully before touching anything, and keep any fix as narrow as possible.
 - **API keys and meeting content are both stored in plaintext `localStorage`.** This is disclosed in-app. There is no encryption layer, by design, since there's no backend to hold a decryption key either. Don't add a feature that assumes otherwise.
 - **Browser support is Chrome/Edge only**, gated on the Web Speech API. Any change that assumes Firefox/Safari support for live transcription is a dead end until/unless those vendors ship it.
 - **Testing changes locally always requires a static server**, never `file://` — see [Running locally](#running-locally-before-deploying).
-- **One meeting at a time, per tab.** There's no multi-session or history browser; starting a new meeting clears the previous one's transcript/chat/summary from view. See [Known Limitations](#known-limitations).
+- **One meeting at a time, per tab.** There's no multi-session or history browser; starting a new meeting (or using the explicit "Clear" action) wipes the previous one's transcript/chat/summary from view and from storage. See [Known Limitations](#known-limitations).
+- **The resizable-panel width and the theme choice are both pure UI preferences**, stored under their own dedicated `localStorage` keys directly in `ui.js` / an inline script in `index.html` — deliberately *not* routed through `storage.js`'s settings object, which is reserved for actual app configuration (keys, languages, etc.). Follow that same pattern for any future display-only preference.
 
 ---
 
@@ -184,6 +212,7 @@ A few things worth knowing before making changes, so behavior doesn't quietly re
 
 - The "system audio" channel is a best-effort workaround, not a true two-speaker separation — see the dedicated section above.
 - Reload recovery covers the transcript and summary text only; a recorded audio file cannot be recovered after a reload (Blobs don't survive `localStorage` serialization).
+- Chat history sent to the AI is capped to the most recent ~10 messages, to keep API payloads well under any size limit — very old turns in a long chat session won't be part of the AI's context, though they remain visible on screen.
 - No multi-meeting history — only the current/most recent meeting's data is kept at a time.
 - No collaborative/multi-user features; this is a single-browser, single-user tool by design.
 
