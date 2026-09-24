@@ -42,6 +42,9 @@ import {
 } from "./storage.js";
 import {
   fetchGeminiModels,
+  fetchGroqModels,
+  DEFAULT_GROQ_MODEL,
+  GROQ_FALLBACK_MODELS,
   summarizeTranscriptStream,
   chatWithTranscriptStream,
   getEngineStatus,
@@ -71,7 +74,8 @@ function pushChatHistory(entry) {
 // meeting in this tab right now.
 const state = {
   settings: null,
-  modelList: [],
+  geminiModelList: [],
+  groqModelList: [],
   meetingState: "idle", // 'idle' | 'starting' | 'listening' | 'paused' | 'stopping' | 'stopped'
   chatHistory: [],
   audioMixer: null,
@@ -441,8 +445,13 @@ function stopLevelMeterLoop() {
 // ---------------------------------------------------------------------------
 
 async function onOpenSettings() {
+  // Populate the dropdowns BEFORE opening: openSettingsModal() reconciles each dropdown with its
+  // manual-override field, and needs the real options in place to tell "custom model" from
+  // "model that's simply in the list". (Populating afterwards left the saved model stuck in the
+  // manual field, which then silently overrode any later dropdown choice.)
+  ui.populateGeminiModelSelect(state.geminiModelList, state.settings.selectedGeminiModel);
+  renderGroqModelSelect();
   ui.openSettingsModal(state.settings);
-  ui.populateModelSelect(state.modelList, state.settings.selectedGeminiModel);
   try {
     const devices = await AudioMixer.listInputDevices();
     ui.populateMicDeviceSelect(devices, state.settings.micDeviceId);
@@ -458,6 +467,7 @@ function onCloseSettings() {
 async function onSaveSettings() {
   const formValues = ui.readSettingsForm();
   const previousGeminiKey = state.settings.geminiKeyPrimary;
+  const previousGroqKey = state.settings.groqKey;
 
   try {
     state.settings = saveSettings(formValues);
@@ -474,8 +484,12 @@ async function onSaveSettings() {
   // a model list yet) — otherwise every unrelated settings save (language,
   // system-channel toggle, etc.) would trigger a needless model-list refetch.
   const keyChanged = state.settings.geminiKeyPrimary !== previousGeminiKey;
-  if (state.settings.geminiKeyPrimary && (keyChanged || state.modelList.length === 0)) {
-    await refreshModels({ silent: true });
+  if (state.settings.geminiKeyPrimary && (keyChanged || state.geminiModelList.length === 0)) {
+    await refreshGeminiModels({ silent: true });
+  }
+  const groqKeyChanged = state.settings.groqKey !== previousGroqKey;
+  if (state.settings.groqKey && (groqKeyChanged || state.groqModelList.length === 0)) {
+    await refreshGroqModels({ silent: true });
   }
 }
 
@@ -487,12 +501,20 @@ function onClearStoredData() {
 function onClearApiKeys() {
   state.settings = clearApiKeys();
   ui.clearApiKeyFields();
-  state.modelList = [];
-  ui.populateModelSelect([], "");
+  state.geminiModelList = [];
+  state.groqModelList = [];
+  ui.populateGeminiModelSelect([], "");
+  renderGroqModelSelect();
   ui.showToast("Cleared your saved API keys from this browser. Other settings are unaffected.", "success");
 }
 
-async function onRefreshModels() {
+/** Rebuilds the Groq dropdown from the live list, or the built-in list until one has loaded. */
+function renderGroqModelSelect(selectedId = state.settings.groqModel) {
+  const models = state.groqModelList.length > 0 ? state.groqModelList : GROQ_FALLBACK_MODELS;
+  ui.populateGroqModelSelect(models, selectedId || DEFAULT_GROQ_MODEL);
+}
+
+async function onRefreshGeminiModels() {
   const formValues = ui.readSettingsForm();
   const key = formValues.geminiKeyPrimary || state.settings.geminiKeyPrimary;
   if (!key) {
@@ -501,21 +523,49 @@ async function onRefreshModels() {
   }
   try {
     ui.showToast("Fetching available models…", "info");
-    state.modelList = await fetchGeminiModels(key);
-    ui.populateModelSelect(state.modelList, formValues.selectedGeminiModel || state.settings.selectedGeminiModel);
-    ui.showToast(`Loaded ${state.modelList.length} models.`, "success");
+    state.geminiModelList = await fetchGeminiModels(key);
+    ui.populateGeminiModelSelect(state.geminiModelList, formValues.selectedGeminiModel || state.settings.selectedGeminiModel);
+    ui.showToast(`Loaded ${state.geminiModelList.length} models.`, "success");
   } catch (err) {
     console.error("fetchGeminiModels failed:", err);
     ui.showToast(err.message || "Failed to fetch models.", "error");
   }
 }
 
-async function refreshModels({ silent = false } = {}) {
+async function onRefreshGroqModels() {
+  const formValues = ui.readSettingsForm();
+  const key = formValues.groqKey || state.settings.groqKey;
+  if (!key) {
+    ui.showToast("Enter a Groq API key first.", "error");
+    return;
+  }
   try {
-    state.modelList = await fetchGeminiModels(state.settings.geminiKeyPrimary);
-    if (!silent) ui.showToast(`Loaded ${state.modelList.length} models.`, "success");
+    ui.showToast("Fetching available Groq models…", "info");
+    state.groqModelList = await fetchGroqModels(key);
+    renderGroqModelSelect(formValues.groqModel || state.settings.groqModel);
+    ui.showToast(`Loaded ${state.groqModelList.length} Groq models.`, "success");
   } catch (err) {
-    console.error("refreshModels failed:", err);
+    console.error("fetchGroqModels failed:", err);
+    ui.showToast(err.message || "Failed to fetch Groq models.", "error");
+  }
+}
+
+async function refreshGeminiModels({ silent = false } = {}) {
+  try {
+    state.geminiModelList = await fetchGeminiModels(state.settings.geminiKeyPrimary);
+    if (!silent) ui.showToast(`Loaded ${state.geminiModelList.length} models.`, "success");
+  } catch (err) {
+    console.error("refreshGeminiModels failed:", err);
+    if (!silent) ui.showToast(err.message, "error");
+  }
+}
+
+async function refreshGroqModels({ silent = false } = {}) {
+  try {
+    state.groqModelList = await fetchGroqModels(state.settings.groqKey);
+    if (!silent) ui.showToast(`Loaded ${state.groqModelList.length} Groq models.`, "success");
+  } catch (err) {
+    console.error("refreshGroqModels failed:", err);
     if (!silent) ui.showToast(err.message, "error");
   }
 }
@@ -576,7 +626,8 @@ async function onSummarize() {
     for await (const delta of summarizeTranscriptStream({
       transcriptText: buildTranscriptText(),
       settings: state.settings,
-      modelList: state.modelList,
+      geminiModelList: state.geminiModelList,
+      groqModelList: state.groqModelList,
       onFallback: onAiFallback,
       signal: state.aiAbortController.signal,
     })) {
@@ -648,7 +699,8 @@ async function onChatSubmit(userMessage) {
       chatHistory: priorHistory,
       userMessage,
       settings: state.settings,
-      modelList: state.modelList,
+      geminiModelList: state.geminiModelList,
+      groqModelList: state.groqModelList,
       onFallback: onAiFallback,
       signal: state.aiAbortController.signal,
     })) {
@@ -737,7 +789,8 @@ function init() {
     onOpenSettings,
     onCloseSettings,
     onSaveSettings,
-    onRefreshModels,
+    onRefreshGeminiModels,
+    onRefreshGroqModels,
     onClearStoredData,
     onClearApiKeys,
     onClearMeeting,
@@ -759,7 +812,8 @@ function init() {
   ui.setClearButtonEnabled(false);
   ui.setSummaryEmptyState(true);
   ui.switchSidePanel("summary");
-  ui.populateModelSelect([], "");
+  ui.populateGeminiModelSelect([], "");
+  renderGroqModelSelect();
   ui.hideMeetingTimer();
   resetEngineStatus();
   ui.renderEngineStatus(getEngineStatus());
@@ -774,7 +828,10 @@ function init() {
   }
 
   if (hasAnyAiKey(state.settings) && state.settings.geminiKeyPrimary) {
-    refreshModels({ silent: true });
+    refreshGeminiModels({ silent: true });
+  }
+  if (state.settings.groqKey) {
+    refreshGroqModels({ silent: true });
   }
 }
 
