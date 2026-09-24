@@ -17,7 +17,7 @@ const GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions";
 /** Used for the Groq step of the failover chain. Groq's catalog changes independently
  *  of Gemini's, so this is a single, currently-solid general-purpose model rather than
  *  something dynamically discovered. */
-export const DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b";
+export const DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b";
 
 const MAX_CONTEXT_CHARS = 24000; // ~6k tokens — keeps long meetings from blowing the context window
 
