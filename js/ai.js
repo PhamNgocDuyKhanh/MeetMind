@@ -1,7 +1,7 @@
 // js/ai.js
 // ---------------------------------------------------------------------------
 // All communication with Gemini and Groq. Two jobs:
-//   1. Dynamic model discovery from Google's models endpoint.
+//   1. Dynamic model discovery from Google's and Groq's models endpoints.
 //   2. Streaming generation with an intelligent, delay-free failover chain:
 //        A) same key, lighter model  ->  B) secondary Gemini key
 //                                     ->  C) Groq
@@ -13,11 +13,19 @@
 const GEMINI_DISCOVERY_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions";
+const GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models";
 
-/** Used for the Groq step of the failover chain. Groq's catalog changes independently
- *  of Gemini's, so this is a single, currently-solid general-purpose model rather than
- *  something dynamically discovered. */
+/** Preferred Groq model when the user hasn't picked one. Only a *preference*: if Groq's live
+ *  catalog no longer lists it, resolveGroqModel() falls back to a model that is listed. */
 export const DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b";
+
+/** Groq's /models endpoint also lists speech-to-text, text-to-speech, safety classifiers and
+ *  agentic "compound" systems. None of those work as a plain chat-completions fallback. */
+const GROQ_NON_CHAT_PATTERN = /whisper|tts|orpheus|guard|embed|moderation|compound/i;
+
+/** Weight given to Groq models whose id has no parameter count (e.g. "kimi-k2-instruct").
+ *  Deliberately huge so they count as "heavy" and are never picked as a lighter fallback. */
+const GROQ_UNKNOWN_SIZE_WEIGHT = 1000;
 
 const MAX_CONTEXT_CHARS = 24000; // ~6k tokens — keeps long meetings from blowing the context window
 
@@ -81,6 +89,33 @@ function scoreModelWeight(modelName) {
 }
 
 /**
+ * Shared request/error handling for the providers' model-discovery endpoints, so Gemini and Groq
+ * report failures identically. Resolves to the parsed JSON body.
+ * @param {{provider:string, providerName:string, url:string, headers:Object, invalidKeyStatuses:number[]}} options
+ */
+async function fetchModelCatalog({ provider, providerName, url, headers, invalidKeyStatuses }) {
+  let res;
+  try {
+    res = await fetch(url, { headers });
+  } catch (err) {
+    throw new AIError(`Network error while fetching ${providerName} models.`, { code: "network", provider, cause: err });
+  }
+
+  if (!res.ok) {
+    if (invalidKeyStatuses.includes(res.status)) {
+      throw new AIError(`${providerName} API key was rejected. Double-check it in Settings.`, { code: "invalid-key", provider });
+    }
+    throw new AIError(`Failed to fetch ${providerName} models (HTTP ${res.status}).`, { code: "network", provider });
+  }
+
+  try {
+    return await res.json();
+  } catch (err) {
+    throw new AIError(`${providerName} returned an unreadable model list.`, { code: "unknown", provider, cause: err });
+  }
+}
+
+/**
  * Fetches the list of Gemini models that support text generation from
  * Google's discovery endpoint, ranked lightest-first.
  * @param {string} apiKey
@@ -91,34 +126,15 @@ export async function fetchGeminiModels(apiKey) {
     throw new AIError("No Gemini API key provided.", { code: "no-key", provider: "gemini" });
   }
 
-  let res;
-  try {
-    res = await fetch(GEMINI_DISCOVERY_URL, { headers: { "x-goog-api-key": apiKey } });
-  } catch (err) {
-    throw new AIError("Network error while fetching Gemini models.", { code: "network", provider: "gemini", cause: err });
-  }
+  const data = await fetchModelCatalog({
+    provider: "gemini",
+    providerName: "Gemini",
+    url: GEMINI_DISCOVERY_URL,
+    headers: { "x-goog-api-key": apiKey },
+    invalidKeyStatuses: [400, 403],
+  });
 
-  if (!res.ok) {
-    if (res.status === 400 || res.status === 403) {
-      throw new AIError("Gemini API key was rejected. Double-check it in Settings.", {
-        code: "invalid-key",
-        provider: "gemini",
-      });
-    }
-    throw new AIError(`Failed to fetch Gemini models (HTTP ${res.status}).`, {
-      code: "network",
-      provider: "gemini",
-    });
-  }
-
-  let data;
-  try {
-    data = await res.json();
-  } catch (err) {
-    throw new AIError("Gemini returned an unreadable model list.", { code: "unknown", provider: "gemini", cause: err });
-  }
-
-  const models = (data.models || [])
+  return (data.models || [])
     .filter((m) => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes("generateContent"))
     .filter((m) => !/embedding|aqa|vision(?!.*flash)|imagen|veo/i.test(m.name))
     .map((m) => ({
@@ -128,8 +144,6 @@ export async function fetchGeminiModels(apiKey) {
       weight: scoreModelWeight(m.name),
     }))
     .sort((a, b) => a.weight - b.weight || a.id.localeCompare(b.id));
-
-  return models;
 }
 
 /** Finds the closest lighter model to fall back to, or null if none exists (including when
@@ -147,18 +161,77 @@ export function findLighterModel(currentModelId, modelList) {
   return lighterCandidates[0] || null;
 }
 
+/** Groq has no light/flash/pro tiers, so rank by parameter count parsed from the id
+ *  ("llama-3.1-8b-instant" -> 8, "gpt-oss-120b" -> 120). */
+function scoreGroqModelWeight(modelId) {
+  const match = modelId.match(/(?:^|[-_/])(\d+(?:\.\d+)?)b(?:[-_/]|$)/i);
+  return match ? parseFloat(match[1]) : GROQ_UNKNOWN_SIZE_WEIGHT;
+}
+
+/** Groq's API has no display names, so the id itself is the most recognisable label. */
+function toGroqModel(id, description = "") {
+  return { id, displayName: id, description, weight: scoreGroqModelWeight(id) };
+}
+
+/** Shown in Settings only while the live Groq list hasn't been fetched (no key yet, or the
+ *  request failed). Not used for failover — that only ever uses a live list. */
+export const GROQ_FALLBACK_MODELS = [DEFAULT_GROQ_MODEL, "openai/gpt-oss-120b"].map((id) => toGroqModel(id));
+
+/**
+ * Fetches the list of Groq models usable for chat completions from Groq's discovery
+ * endpoint, ranked lightest-first. Same return shape as fetchGeminiModels(), so
+ * findLighterModel() works on either list.
+ * @param {string} apiKey
+ * @returns {Promise<Array<{id:string, displayName:string, description:string, weight:number}>>}
+ */
+export async function fetchGroqModels(apiKey) {
+  if (!apiKey) {
+    throw new AIError("No Groq API key provided.", { code: "no-key", provider: "groq" });
+  }
+
+  const data = await fetchModelCatalog({
+    provider: "groq",
+    providerName: "Groq",
+    url: GROQ_MODELS_URL,
+    headers: { Authorization: `Bearer ${apiKey}` },
+    invalidKeyStatuses: [401, 403],
+  });
+
+  return (data.data || [])
+    .filter((m) => m && typeof m.id === "string" && m.active !== false)
+    .filter((m) => !GROQ_NON_CHAT_PATTERN.test(m.id))
+    .map((m) =>
+      toGroqModel(
+        m.id,
+        [m.owned_by, m.context_window ? `${m.context_window.toLocaleString("en-US")} token context` : ""].filter(Boolean).join(" · ")
+      )
+    )
+    .sort((a, b) => a.weight - b.weight || a.id.localeCompare(b.id));
+}
+
+/** Picks the Groq model to use: the user's explicit choice always wins (it may be a manually
+ *  typed name the list doesn't know about). Otherwise prefer DEFAULT_GROQ_MODEL if Groq still
+ *  offers it, then the lightest live model, then the static default when no list is available. */
+export function resolveGroqModel(settings, groqModelList) {
+  if (settings.groqModel) return settings.groqModel;
+  if (Array.isArray(groqModelList) && groqModelList.length > 0) {
+    return groqModelList.some((m) => m.id === DEFAULT_GROQ_MODEL) ? DEFAULT_GROQ_MODEL : groqModelList[0].id;
+  }
+  return DEFAULT_GROQ_MODEL;
+}
+
 // ---------------------------------------------------------------------------
 // Failover chain
 // ---------------------------------------------------------------------------
 
-function buildAttemptChain(settings, modelList) {
+function buildAttemptChain(settings, geminiModelList, groqModelList) {
   const chain = [];
   const primaryModel = settings.selectedGeminiModel;
 
   if (settings.geminiKeyPrimary && primaryModel) {
     chain.push({ provider: "gemini", key: settings.geminiKeyPrimary, model: primaryModel, label: "Primary Gemini key" });
 
-    const lighter = findLighterModel(primaryModel, modelList);
+    const lighter = findLighterModel(primaryModel, geminiModelList);
     if (lighter) {
       chain.push({
         provider: "gemini",
@@ -174,12 +247,19 @@ function buildAttemptChain(settings, modelList) {
   }
 
   if (settings.groqKey) {
-    chain.push({
-      provider: "groq",
-      key: settings.groqKey,
-      model: settings.groqModel || DEFAULT_GROQ_MODEL,
-      label: "Groq fallback",
-    });
+    const groqModel = resolveGroqModel(settings, groqModelList);
+    chain.push({ provider: "groq", key: settings.groqKey, model: groqModel, label: "Groq fallback" });
+
+    // Groq rate-limits per model, so a lighter model on the same key is a real extra chance.
+    const lighterGroq = findLighterModel(groqModel, groqModelList);
+    if (lighterGroq) {
+      chain.push({
+        provider: "groq",
+        key: settings.groqKey,
+        model: lighterGroq.id,
+        label: `Groq · lighter model (${lighterGroq.displayName})`,
+      });
+    }
   }
 
   return chain;
@@ -419,12 +499,13 @@ async function* streamGroqCompletion({ apiKey, model, contents, signal }) {
  * @param {Object} params
  * @param {Array} params.contents - Gemini-style contents array.
  * @param {Object} params.settings - persisted settings (keys + selected model).
- * @param {Array} params.modelList - dynamically fetched Gemini model list.
+ * @param {Array} params.geminiModelList - dynamically fetched Gemini model list.
+ * @param {Array} [params.groqModelList] - dynamically fetched Groq model list.
  * @param {(info: {fromProvider,fromModel,toProvider,toModel,reason,label}) => void} [params.onFallback]
  * @param {AbortSignal} [params.signal]
  */
-export async function* generateContentStream({ contents, settings, modelList, onFallback = () => {}, signal } = {}) {
-  const attempts = buildAttemptChain(settings, modelList);
+export async function* generateContentStream({ contents, settings, geminiModelList = [], groqModelList = [], onFallback = () => {}, signal } = {}) {
+  const attempts = buildAttemptChain(settings, geminiModelList, groqModelList);
   if (attempts.length === 0) {
     setEngineStatus({ state: "error" });
     throw new AIError("No AI provider is configured. Add an API key and select a model in Settings.", { code: "no-key" });
@@ -518,7 +599,7 @@ export async function* generateContentStream({ contents, settings, modelList, on
 }
 
 /** Streams a meeting summary (overview, key points, action items) as markdown text deltas. */
-export async function* summarizeTranscriptStream({ transcriptText, settings, modelList, onFallback, signal }) {
+export async function* summarizeTranscriptStream({ transcriptText, settings, geminiModelList, groqModelList, onFallback, signal }) {
   const contents = [
     {
       role: "user",
@@ -534,11 +615,11 @@ export async function* summarizeTranscriptStream({ transcriptText, settings, mod
       ],
     },
   ];
-  yield* generateContentStream({ contents, settings, modelList, onFallback, signal });
+  yield* generateContentStream({ contents, settings, geminiModelList, groqModelList, onFallback, signal });
 }
 
 /** Streams a chat reply grounded in the meeting transcript, given prior chat turns and a new user message. */
-export async function* chatWithTranscriptStream({ transcriptText, chatHistory = [], userMessage, settings, modelList, onFallback, signal }) {
+export async function* chatWithTranscriptStream({ transcriptText, chatHistory = [], userMessage, settings, geminiModelList, groqModelList, onFallback, signal }) {
   const contents = [
     {
       role: "user",
@@ -559,5 +640,5 @@ export async function* chatWithTranscriptStream({ transcriptText, chatHistory = 
     ...chatHistory.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.text }] })),
     { role: "user", parts: [{ text: userMessage }] },
   ];
-  yield* generateContentStream({ contents, settings, modelList, onFallback, signal });
+  yield* generateContentStream({ contents, settings, geminiModelList, groqModelList, onFallback, signal });
 }
