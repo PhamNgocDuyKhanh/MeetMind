@@ -42,7 +42,8 @@ function cacheElements() {
     "input-gemini-model-manual",
     "select-groq-model",
     "input-groq-model-manual",
-    "btn-refresh-models",
+    "btn-refresh-gemini-models",
+    "btn-refresh-groq-models",
     "select-mic-device",
     "select-mic-language",
     "select-system-language",
@@ -411,13 +412,13 @@ function toggleExportMenu() {
 
 // ---- Settings modal ----------------------------------------------------------
 
-export function populateModelSelect(models, selectedId) {
-  els.selectGeminiModel.innerHTML = "";
+function fillModelSelect(selectEl, models, selectedId, emptyLabel) {
+  selectEl.innerHTML = "";
   if (models.length === 0) {
     const opt = document.createElement("option");
     opt.value = "";
-    opt.textContent = "No models loaded — add a key and refresh";
-    els.selectGeminiModel.appendChild(opt);
+    opt.textContent = emptyLabel;
+    selectEl.appendChild(opt);
     return;
   }
   if (!selectedId) {
@@ -426,15 +427,24 @@ export function populateModelSelect(models, selectedId) {
     placeholder.textContent = "Select a model…";
     placeholder.disabled = true;
     placeholder.selected = true;
-    els.selectGeminiModel.appendChild(placeholder);
+    selectEl.appendChild(placeholder);
   }
   models.forEach((m) => {
     const opt = document.createElement("option");
     opt.value = m.id;
     opt.textContent = m.displayName;
+    if (m.description) opt.title = m.description;
     if (m.id === selectedId) opt.selected = true;
-    els.selectGeminiModel.appendChild(opt);
+    selectEl.appendChild(opt);
   });
+}
+
+export function populateGeminiModelSelect(models, selectedId) {
+  fillModelSelect(els.selectGeminiModel, models, selectedId, "No models loaded — add a key and refresh");
+}
+
+export function populateGroqModelSelect(models, selectedId) {
+  fillModelSelect(els.selectGroqModel, models, selectedId, "No models loaded — add a key and refresh");
 }
 
 export function populateMicDeviceSelect(devices, selectedId) {
@@ -457,17 +467,20 @@ export function populateMicDeviceSelect(devices, selectedId) {
  * Reconciles a <select> + manual-override <input> pair against a saved value:
  * if the value matches one of the select's options, select it and clear the
  * manual field; otherwise (a custom/typed model the dropdown doesn't know
- * about) leave the select on its default and surface the value in the manual
- * field instead, so Settings never looks like it "forgot" a custom model.
+ * about) leave the select blank and surface the value in the manual field
+ * instead, so Settings never looks like it "forgot" a custom model. With no
+ * saved value at all, the select keeps whatever default its populate step chose.
  */
 function reconcileModelField(selectEl, manualInputEl, currentValue) {
+  manualInputEl.value = "";
+  if (!currentValue) return;
+
   const matchesOption = Array.from(selectEl.options).some((o) => o.value === currentValue);
-  if (currentValue && !matchesOption) {
+  if (matchesOption) {
+    selectEl.value = currentValue;
+  } else {
     manualInputEl.value = currentValue;
     selectEl.value = "";
-  } else {
-    manualInputEl.value = "";
-    selectEl.value = currentValue || "";
   }
 }
 
@@ -811,7 +824,8 @@ export function bindControls(handlers) {
     e.preventDefault();
     handlers.onSaveSettings();
   });
-  els.btnRefreshModels.addEventListener("click", handlers.onRefreshModels);
+  els.btnRefreshGeminiModels.addEventListener("click", handlers.onRefreshGeminiModels);
+  els.btnRefreshGroqModels.addEventListener("click", handlers.onRefreshGroqModels);
   els.btnClearStoredData.addEventListener("click", handlers.onClearStoredData);
   els.btnClearApiKeys.addEventListener("click", handlers.onClearApiKeys);
   els.btnClearMeeting.addEventListener("click", handlers.onClearMeeting);
