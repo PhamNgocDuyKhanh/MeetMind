@@ -247,7 +247,7 @@
           <label for="select-gemini-model" class="field__label">Gemini model</label>
           <div class="field__row">
             <select id="select-gemini-model" class="select"></select>
-            <button id="btn-refresh-models" type="button" class="btn btn-icon" aria-label="Refresh model list" title="Refresh model list">
+            <button id="btn-refresh-gemini-models" type="button" class="btn btn-icon" aria-label="Refresh Gemini model list" title="Refresh Gemini model list">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
               </svg>
@@ -259,12 +259,16 @@
 
         <div class="field">
           <label for="select-groq-model" class="field__label">Groq fallback model</label>
-          <select id="select-groq-model" class="select">
-            <option value="openai/gpt-oss-20b">GPT OSS 20B</option>
-            <option value="openai/gpt-oss-120b">GPT OSS 120B</option>
-          </select>
+          <div class="field__row">
+            <select id="select-groq-model" class="select"></select>
+            <button id="btn-refresh-groq-models" type="button" class="btn btn-icon" aria-label="Refresh Groq model list" title="Refresh Groq model list">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+              </svg>
+            </button>
+          </div>
           <input id="input-groq-model-manual" type="text" autocomplete="off" placeholder="Or type a Groq model name manually" class="input" style="margin-top:.4rem;" />
-          <p class="field__hint">Used only when both Gemini keys are exhausted or rate-limited.</p>
+          <p class="field__hint">Fetched live from Groq's model list once a Groq key is saved (until then, a short built-in list is shown). Used only when both Gemini keys are exhausted or rate-limited; a lighter Groq model is tried before giving up.</p>
         </div>
 
         <div class="field">
